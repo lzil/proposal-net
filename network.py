@@ -13,11 +13,10 @@ import sys
 from utils import Bunch, load_rb, fill_undefined_args
 from helpers import get_output_activation
 
-default_arglist = {
-    'L': 1,
+RESERVOIR_ARGS = {
     'D': 5,
     'N': 20,
-    'Z': 1,
+    'Z': 2,
     'res_init_type': 'gaussian',
     'res_init_params': {'std': 1.5},
     'res_burn_steps': 200,
@@ -25,19 +24,32 @@ default_arglist = {
     'reservoir_path': None,
     'bias': True,
     'network_delay': 0,
-    'out_act': 'exp',
+    'out_act': 'none',
     'stride': 1,
     'model_path': None
 }
-BASIC_ARGS = Bunch(**default_arglist)
-SIMULATOR_ARGS = copy.deepcopy(BASIC_ARGS)
-SIMULATOR_ARGS.reservoir_seed = 0
+SIMULATOR_ARGS = {
+    'L': 2,
+    'D': 5,
+    'T': 2,
+    'bias': True
+}
+HYPOTHESIZER_ARGS = {
+    'L': 2,
+    'D': 5,
+    'T': 2,
+    'bias': True,
+}
+BASIC_ARGS = RESERVOIR_ARGS
+HYPOTHESISNET_ARGS = {**RESERVOIR_ARGS, **SIMULATOR_ARGS, **HYPOTHESIZER_ARGS}
+
+# SIMULATOR_ARGS.reservoir_seed = 0
 
 # reservoir network. shouldn't be trained
 class Reservoir(nn.Module):
-    def __init__(self, args=BASIC_ARGS):
+    def __init__(self, args=RESERVOIR_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, BASIC_ARGS)
+        args = fill_undefined_args(args, RESERVOIR_ARGS, to_bunch=True)
         self.args = copy.deepcopy(args)
 
         if not hasattr(args, 'reservoir_seed'):
@@ -129,7 +141,7 @@ class Reservoir(nn.Module):
 class BasicNetwork(nn.Module):
     def __init__(self, args=BASIC_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, BASIC_ARGS)
+        args = fill_undefined_args(args, BASIC_ARGS, to_bunch=True)
         self.args = args
         self.reservoir = Reservoir(args)
 
@@ -183,17 +195,24 @@ class BasicNetwork(nn.Module):
 # given state and action, predicts next state
 class Simulator(nn.Module):
     def __init__(self, args=SIMULATOR_ARGS):
-        args = fill_undefined_args(args, SIMULATOR_ARGS)
+        args = fill_undefined_args(args, SIMULATOR_ARGS, to_bunch=True)
         super().__init__()
         self.args = args
 
-        # using 2 for now for 2D target, can generalize later
-        # also only using 1 layer for now, can add more later
-        self.W_sim = nn.Linear(self.args.L + self.args.D, 2)
+        if not hasattr(args, 'simulator_seed'):
+            self.args.simulator_seed = random.randrange(1e6)
 
+        rng_pt = torch.get_rng_state()
+        torch.manual_seed(self.args.simulator_seed)
+        self.W_sim = nn.Sequential(
+            nn.Linear(self.args.L + self.args.D, 16),
+            nn.ReLU(),
+            nn.Linear(16, self.args.T)
+        )
+        torch.set_rng_state(rng_pt)
 
     def forward(self, s, p):
-        inp = torch.cat([s, p])
+        inp = torch.cat([s, p], dim=-1)
         pred = self.W_sim(inp)
 
         return pred
@@ -221,7 +240,7 @@ class Hypothesizer(nn.Module):
 class StateNet(nn.Module):
     def __init__(self, args=BASIC_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, BASIC_ARGS)
+        args = fill_undefined_args(args, BASIC_ARGS, to_bunch=True)
         self.args = args
 
         self.hypothesizer = Hypothesizer(args)
@@ -260,18 +279,27 @@ class StateNet(nn.Module):
         self.s = torch.zeros(self.args.Z)
 
 
+
+
 # captures the hypothesis generator and simulator into a single class
 class HypothesisNet(nn.Module):
-    def __init__(self, args=BASIC_ARGS):
+    def __init__(self, args=HYPOTHESISNET_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, BASIC_ARGS)
+        args = fill_undefined_args(args, HYPOTHESISNET_ARGS, to_bunch=True)
         self.args = args
 
         self.hypothesizer = Hypothesizer(args)
         self.simulator = Simulator(args)
         self.reservoir = Reservoir(args)
 
-        self.W_ro = nn.Linear(args.N, args.Z, bias=self.args.bias)
+
+        if not hasattr(args, 'W_ro_seed'):
+            self.args.W_ro_seed = random.randrange(1e6)
+
+        rng_pt = torch.get_rng_state()
+        torch.manual_seed(self.args.W_ro_seed)
+        self.W_ro = nn.Linear(args.N, args.Z, bias=args.bias)
+        torch.set_rng_state(rng_pt)
 
         self.reset()
 

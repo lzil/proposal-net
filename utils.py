@@ -36,7 +36,7 @@ def add_yaml_args(args, config_file):
 
 # fills an argument dictionary with keys from a default dictionary
 # also works with dicts now
-def fill_undefined_args(args, default_args, overwrite_none=False):
+def fill_undefined_args(args, default_args, overwrite_none=False, to_bunch=False):
     # so we don't overwrite the original args
     args = copy.deepcopy(args)
     # takes care of default args not being a dict
@@ -53,6 +53,9 @@ def fill_undefined_args(args, default_args, overwrite_none=False):
             args_dict[k] = default_args[k]
         elif overwrite_none and args_dict[k] is None:
             args_dict[k] = default_args[k]
+
+    if to_bunch:
+        args = Bunch(**args_dict)
     return args
 
 

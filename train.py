@@ -290,7 +290,7 @@ class Trainer:
             pickle.dump(self.vis_samples, f)
 
     def train_iteration(self, x, y):
-        self.net.reset(self.args.reservoir_x_init)
+        self.net.reset()
         self.optimizer.zero_grad()
 
         outs = []
@@ -323,7 +323,6 @@ class Trainer:
                 outs.append(net_out[-1].item())
 
         total_loss.backward()
-
         etc = {
             'ins': ins,
             'targets': targets,
@@ -331,6 +330,11 @@ class Trainer:
         }
         if self.args.dset_type == 'goals':
             etc['indices'] = cur_idx
+
+        if ix_callback is not None:
+            ix_callback(total_loss, etc)
+        self.optimizer.step()
+
         return total_loss, etc
 
     # runs an iteration where we want to match a certain trajectory
@@ -365,7 +369,7 @@ class Trainer:
         x, y = get_x_y(batch, self.args.dataset)
 
         with torch.no_grad():
-            self.net.reset(self.args.reservoir_x_init)
+            self.net.reset()
             total_loss = torch.tensor(0.)
 
             if self.args.dset_type == 'goals':
@@ -410,12 +414,7 @@ class Trainer:
                 ix += 1
 
                 x, y = get_x_y(batch, self.args.dataset)
-
                 loss, etc = self.train_iteration(x, y)
-
-                if ix_callback is not None:
-                    ix_callback(loss, etc)
-                self.optimizer.step()
 
                 if loss == -1:
                     logging.info(f'iteration {ix}: is nan. ending')

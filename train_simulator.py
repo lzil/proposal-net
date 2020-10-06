@@ -15,7 +15,7 @@ import csv
 import math
 import json
 
-from network import HypothesisNetwork, Reservoir, Simulator, Hypothesizer
+from network import Reservoir, Simulator, Hypothesizer, HypothesisNet
 
 from utils import log_this, load_rb, Bunch
 from helpers import get_optimizer, get_criterion
@@ -26,16 +26,60 @@ if __name__ == '__main__':
     Z = 2
     D = 5
 
-    args = Bunch(L=L, Z=Z, D=D, dataset='datasets/temp.pkl', out_act='none', reservoir_seed=1)
+    config = {'simulator_seed': 0, 'reservoir_seed': 0, 'reservoir_x_seed': 0, 'D': D}
 
-    net = Simulator(args)
-    reservoir = Reservoir(args)
+    config = Bunch(**config)
+    net = HypothesisNet(config)
 
+    # args = Bunch(L=L, Z=Z, D=D, dataset='datasets/temp.pkl', out_act='none', reservoir_seed=1)
+
+    simulator = net.simulator
+    reservoir = net.reservoir
+    W_ro = net.W_ro
+
+    batch_size = 10
+
+    criterion = nn.MSELoss()
+    train_params = simulator.parameters()
+    optimizer = optim.Adam(train_params, lr=1e-3)
 
     for i in range(1000):
-        prop = torch.Tensor(np.random.normal(size=D))
 
-        pdb.set_trace()
+        reservoir.reset()
+        optimizer.zero_grad()
+
+        prop = torch.Tensor(np.random.normal(size=(batch_size, D)))
+        state = torch.Tensor(np.random.normal(size=(batch_size, L)))
+        sim_out = simulator(state, prop)
+
+        # run reservoir 10 steps, so predict 10 steps in future
+        res_outs = []
+        for j in range(10):
+            res_outs.append(W_ro(reservoir(prop)))
+
+        # get state output
+        res_final = res_outs[-1] + state
+
+        diff = torch.norm(res_final - sim_out, dim=1)
+        loss = criterion(diff, torch.zeros_like(diff))
+
+        loss.backward()
+
+        optimizer.step()
+
+        if i % 100 == 0 and i != 0:
+            print(f'iteration: {i} | loss {loss}')
+
+
+    reservoir.reset()
+    optimizer.zero_grad()
+
+    prop = torch.Tensor(np.random.normal(size=(batch_size, D)))
+    state = torch.Tensor(np.random.normal(size=(batch_size, L)))
+    sim_out = simulator(state, prop)
+    res_out = W_ro(reservoir(prop))
+        
+    pdb.set_trace()
 
 
     
