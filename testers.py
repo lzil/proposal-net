@@ -11,108 +11,67 @@ import sys
 from network import BasicNetwork, StateNet
 from utils import Bunch, load_rb
 
-from helpers import seq_goals_loss, update_seq_indices, get_x_y
+from helpers import goals_loss, update_goal_indices, get_x_y
 
 
 
 # extracts the correct parameters N, D, O, etc. in order to properly create a net to load into
-# TODO: load from config path instead it will be easier than wrestling with bugs
-def load_model_path(path, params={}):
-    path_folder = '/'.join(path.split('/')[:-1])
-    model_id = path.split('_')[-1][:-4]
-    config_path = os.path.join(path_folder, f'config_{model_id}.json')
+def load_model_path(path, config):
+    if type(config) is dict:
+        config = Bunch(**config)
+    config.model_path = path
 
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+    if config.net == 'basic':
+        net = BasicNetwork(config)
+    elif config.net == 'state':
+        net = StateNet(config)
 
-    #m_dict = torch.load(path)
-    bunch = Bunch()
-    bunch.N = config['N']
-    bunch.D = config['D']
-    bunch.L = config['L']
-    bunch.Z = config['Z']
-    bunch.T = config['T']
-    bunch.bias = True
-
-    bunch.res_frequency = config['res_frequency']
-    bunch.res_input_decay = config['res_input_decay']
-
-    #bunch.reservoir_burn_steps = 200
-    bunch.reservoir_x_seed = 0
-    bunch.res_noise = config['res_noise']
-    #bunch.network_delay = 0
-
-    #bunch.res_init_type = 'gaussian'
-    #bunch.res_init_params = {'std': 1.5}
-    bunch.reservoir_seed = 0
-
-    bunch.model_path = path
-
-    #bunch.res_noise = 0
-    if params['res_noise'] is not None:
-        bunch.res_noise = params['res_noise']
-
-    #bunch.out_act = 'exp'
-    if 'out_act' in params and params['out_act'] is not None:
-        bunch.out_act = params['out_act']
-    elif 'dset' in params:
-        if 'rsg' in params['dset']:
-            bunch.out_act = 'exp'
-        else:
-            bunch.out_act = 'none'
-
-    if 'stride' in params and params['stride'] is not None:
-        bunch.stride = params['stride']
-
-    if config['net'] == 'basic':
-        net = BasicNetwork(bunch)
-    elif config['net'] == 'state':
-        net = StateNet(bunch)
-
-    #net.load_state_dict(m_dict)
     net.eval()
-
-
     return net
 
 # given a model and a dataset, see how well the model does on it
 # works with plot_trained.py
-def test_model(net, dset, n_tests=0, params={'dset': '', 'reservoir_x_init': None, 'seq_goals_timesteps': 200}):
-
-    criterion = nn.MSELoss()
+def test_model(net, config, n_tests=0):
+    dset = load_rb(config.dataset)
+    
     dset_idx = range(len(dset))
+    criterion = nn.MSELoss()
     if n_tests != 0:
         dset_idx = sorted(random.sample(range(len(dset)), n_tests))
 
     dset = [dset[i] for i in dset_idx]
 
-    is_seq_goals = 'seq-goals' in params['dset']
-    x, y = get_x_y(dset, params['dset'])
+    is_goals_task = config.dset_type == 'goals'
+    x, y = get_x_y(dset, config.dset_type)
 
     with torch.no_grad():
-        net.reset(params['reservoir_x_init'])
+        net.reset()
 
         losses = []
         outs = []
 
-        if is_seq_goals:
+        if is_goals_task:
             ins = []
             n_pts = x.shape[1]
             cur_idx = torch.zeros(x.shape[0], dtype=torch.long)
-            for j in range(params['seq_goals_timesteps']):
-                net_in = x[torch.arange(x.shape[0]),cur_idx,:].reshape(-1, net.args.L)
+            for j in range(config.goals_timesteps):
+                net_in = x[torch.arange(x.shape[0]),cur_idx,:]#.reshape(-1, net.args.L)
                 ins.append(net_in)
+                #pdb.set_trace()
                 net_out, extras = net(net_in, extras=True)
-                net_target = net_in.reshape(-1, net.args.Z)
+                # net_target = net_in.reshape(-1, net.args.Z)
 
                 trial_losses = []
-                dones = torch.zeros(x.shape[0], dtype=torch.long)
+                # dones = torch.zeros(x.shape[0], dtype=torch.long)
 
                 for k in range(len(net_out)):
-                    step_loss, done = seq_goals_loss(net_out[k], net_target[k], threshold=params['seq_goals_threshold'])
+                    # need to add the dimension back in so the goals loss fn works
+                    net_out_k = net_out[k].unsqueeze(0)
+                    x_k = x[k].unsqueeze(0)
+                    step_loss, cur_idx[k] = goals_loss(net_out_k, x_k, cur_idx[k], threshold=config.goals_threshold)
                     trial_losses.append(step_loss)
-                    dones[k] = done.item()
-                cur_idx = update_seq_indices(x, cur_idx, dones)
+                    # dones[k] = done.item()
+                # cur_idx = update_seq_indices(x, cur_idx, dones)
 
                 losses.append(np.array(trial_losses))
                 outs.append(net_out)

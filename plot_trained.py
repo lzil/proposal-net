@@ -8,15 +8,18 @@ import random
 import pickle
 import argparse
 import pdb
+import re
+import os
+import json
 
-from utils import load_rb
+from utils import load_rb, fill_undefined_args
 from testers import load_model_path, test_model
 
 # for plotting some instances of a trained model on a specified dataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument('model', help='path to a model file, to be loaded into pytorch')
-parser.add_argument('dataset', help='path to a dataset of trials')
+parser.add_argument('--dataset', help='path to a dataset of trials')
 parser.add_argument('--noise', default=0, help='noise to add to trained weights')
 parser.add_argument('--res_noise', default=None, type=float)
 parser.add_argument('--out_act', default=None, type=str)
@@ -32,6 +35,14 @@ args = parser.parse_args()
 with open(args.model, 'rb') as f:
     model = torch.load(f)
 
+# assuming config is in the same folder as the model
+head, tail = os.path.split(args.model)
+run_id = re.split('_|\.', tail)[1]
+config_path = os.path.join(head, 'config_'+run_id+'.json')
+
+with open(config_path, 'r') as f:
+    config = json.load(f)
+
 if args.noise != 0:
     J = model['W_f.weight']
     v = J.std()
@@ -43,35 +54,40 @@ if args.noise != 0:
     shp = J.shape
     model['W_ro.weight'] += torch.normal(0, v * .5, shp)
 
-net_params = {
-    'dset': args.dataset,
-    'out_act': args.out_act,
-    'stride': args.stride,
-    'res_noise': args.res_noise
-}
-net = load_model_path(args.model, params=net_params)
-dset = load_rb(args.dataset)
+config = fill_undefined_args(args, config, overwrite_none=True)
 
-params={
-    'dset': args.dataset,
-    'reservoir_x_init': args.reservoir_x_init,
-    'seq_goals_timesteps': args.seq_goals_timesteps,
-    'seq_goals_threshold': args.seq_goals_threshold
-}
+# net_params = {
+#     'dset': args.dataset,
+#     'out_act': args.out_act,
+#     'stride': args.stride,
+#     'res_noise': args.res_noise
+# }
+net = load_model_path(args.model, config=config)
+
+
+# dset = load_rb(args.dataset)
+
+# params={
+#     'dset': args.dataset,
+#     'reservoir_x_init': args.reservoir_x_init,
+#     'seq_goals_timesteps': args.seq_goals_timesteps,
+#     'seq_goals_threshold': args.seq_goals_threshold
+# }
+
 
 if args.test_all:
-    _, loss2 = test_model(net, dset, params=params)
+    _, loss2 = test_model(net, config)
     print('avg summed loss (all):', loss2)
 
 if not args.no_plot:
-    data, loss = test_model(net, dset, n_tests=12, params=params)
+    data, loss = test_model(net, config, n_tests=12)
     print('avg summed loss (plotted):', loss)
 
     run_id = '/'.join(args.model.split('/')[-3:-1])
 
     fig, ax = plt.subplots(3,4,sharex=True, sharey=True, figsize=(12,7))
 
-    if 'seq-goals' in args.dataset:
+    if 'goals' in config.dataset:
         for i, ax in enumerate(fig.axes):
             ix, x, y, z, loss = data[i]
             xr = np.arange(len(x))
@@ -90,12 +106,15 @@ if not args.no_plot:
                 ax.plot(dists)
 
             else:
-
+                # plot actual goal points
                 n_pts = y.shape[0]
                 colors = iter(cm.Oranges(np.linspace(.2, 1, n_pts)))
                 for j in range(n_pts):
                     ax.scatter(y[j][0], y[j][1], color=next(colors))
+                    ax.annotate(j+1, (y[j][0], y[j][1]), ha='center', va='center')
                 
+                # plot model output
+                z = z[::2]
                 n_timesteps = z.shape[0]
                 ts_colors = iter(cm.Blues(np.linspace(0.3, 1, n_timesteps)))
                 for j in range(n_timesteps):

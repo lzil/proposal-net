@@ -37,7 +37,7 @@ SIMULATOR_ARGS.reservoir_seed = 0
 class Reservoir(nn.Module):
     def __init__(self, args=BASIC_ARGS):
         super().__init__()
-        args = fill_undefined_args(copy.deepcopy(args), BASIC_ARGS)
+        args = fill_undefined_args(args, BASIC_ARGS)
         self.args = copy.deepcopy(args)
 
         if not hasattr(args, 'reservoir_seed'):
@@ -129,7 +129,7 @@ class Reservoir(nn.Module):
 class BasicNetwork(nn.Module):
     def __init__(self, args=BASIC_ARGS):
         super().__init__()
-        args = fill_undefined_args(copy.deepcopy(args), BASIC_ARGS)
+        args = fill_undefined_args(args, BASIC_ARGS)
         self.args = args
         self.reservoir = Reservoir(args)
 
@@ -183,7 +183,7 @@ class BasicNetwork(nn.Module):
 # given state and action, predicts next state
 class Simulator(nn.Module):
     def __init__(self, args=SIMULATOR_ARGS):
-        args = fill_undefined_args(copy.deepcopy(args), SIMULATOR_ARGS)
+        args = fill_undefined_args(args, SIMULATOR_ARGS)
         super().__init__()
         self.args = args
 
@@ -221,7 +221,7 @@ class Hypothesizer(nn.Module):
 class StateNet(nn.Module):
     def __init__(self, args=BASIC_ARGS):
         super().__init__()
-        args = fill_undefined_args(copy.deepcopy(args), BASIC_ARGS)
+        args = fill_undefined_args(args, BASIC_ARGS)
         self.args = args
 
         self.hypothesizer = Hypothesizer(args)
@@ -264,7 +264,7 @@ class StateNet(nn.Module):
 class HypothesisNet(nn.Module):
     def __init__(self, args=BASIC_ARGS):
         super().__init__()
-        args = fill_undefined_args(copy.deepcopy(args), BASIC_ARGS)
+        args = fill_undefined_args(args, BASIC_ARGS)
         self.args = args
 
         self.hypothesizer = Hypothesizer(args)
