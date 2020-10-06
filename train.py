@@ -16,9 +16,9 @@ import math
 import json
 import copy
 
-from network import BasicNetwork, StateNet, Reservoir
+from network import BasicNetwork, StateNet, Reservoir, HypothesisNet
 
-from utils import log_this, load_rb
+from utils import log_this, load_rb, fill_undefined_args
 from helpers import get_optimizer, get_criterion, goals_loss, update_goal_indices, get_x_y
 
 class Trainer:
@@ -31,12 +31,14 @@ class Trainer:
             self.net = BasicNetwork(self.args)
         elif self.args.net == 'state':
             self.net = StateNet(self.args)
+        elif self.args.net == 'hypothesis':
+            self.net = HypothesisNet(self.args)
 
         # load any specified model parameters into the network
         if args.model_path is not None:
             m_dict = torch.load(args.model_path)
             self.net.load_state_dict(m_dict)
-            logging.info('Loaded model file.')
+            logging.info(f'Loaded model file from {args.model_path}.')
         if args.Wf_path is not None:
             m_dict = torch.load(args.Wf_path)
             self.net.W_f.weight = m_dict['W_f.weight']
@@ -323,6 +325,8 @@ class Trainer:
                 outs.append(net_out[-1].item())
 
         total_loss.backward()
+        self.optimizer.step()
+
         etc = {
             'ins': ins,
             'targets': targets,
@@ -330,10 +334,6 @@ class Trainer:
         }
         if self.args.dset_type == 'goals':
             etc['indices'] = cur_idx
-
-        if ix_callback is not None:
-            ix_callback(total_loss, etc)
-        self.optimizer.step()
 
         return total_loss, etc
 
@@ -416,6 +416,9 @@ class Trainer:
                 x, y = get_x_y(batch, self.args.dataset)
                 loss, etc = self.train_iteration(x, y)
 
+                if ix_callback is not None:
+                    ix_callback(total_loss, etc)
+
                 if loss == -1:
                     logging.info(f'iteration {ix}: is nan. ending')
                     ending = True
@@ -489,7 +492,7 @@ def parse_args():
     parser.add_argument('-N', type=int, default=50, help='number of neurons in reservoir')
     parser.add_argument('-Z', type=int, default=1, help='output dimension')
 
-    parser.add_argument('--net', type=str, default='basic', choices=['basic', 'state'])
+    parser.add_argument('--net', type=str, default='basic', choices=['basic', 'state', 'hypothesis'])
 
     parser.add_argument('--train_parts', type=str, nargs='+', default=['W_ro', 'W_f'])
     parser.add_argument('--stride', type=int, default=1, help='stride of the W_f')
@@ -500,7 +503,9 @@ def parse_args():
     parser.add_argument('--Wro_path', type=str, default=None, help='start training from certain Wro')
     parser.add_argument('--Wf_path', type=str, default=None, help='start training from certain Wf')
     parser.add_argument('--reservoir_path', type=str, default=None, help='saved reservoir. should be saved with seed tho')
+    # parser.add_argument('--simulator_path', type=str, default=None, help='saved simulator')
     
+    parser.add_argument('--no_reservoir', action='store_true', help='leave out the reservoir completely')
     parser.add_argument('--res_init_type', type=str, default='gaussian', help='')
     parser.add_argument('--res_init_gaussian_std', type=float, default=1.5)
     parser.add_argument('--res_frequency', type=int, default=1, help='number of reservoir steps per high level step')
@@ -533,6 +538,7 @@ def parse_args():
     parser.add_argument('--n_epochs', type=int, default=10, help='number of epochs to train for. adam only')
 
     parser.add_argument('--seed', type=int, help='seed for most of network')
+    parser.add_argument('--network_seed', type=int, help='seed for the network')
     parser.add_argument('--reservoir_seed', type=int, help='seed for reservoir')
     parser.add_argument('--reservoir_x_seed', type=int, default=0, help='seed for reservoir init hidden states. -1 for zero init')
 
@@ -551,20 +557,11 @@ def parse_args():
     if args.res_init_type == 'gaussian':
         args.res_init_params['std'] = args.res_init_gaussian_std
     args.bias = not args.no_bias
+    args.use_reservoir = not args.no_reservoir
     return args
 
 def adjust_args(args):
     # don't use logging.info before we initialize the logger!! or else stuff is gonna fail
-
-    # setting seeds
-    if args.reservoir_seed is None:
-        args.reservoir_seed = random.randrange(1e6)
-    if args.seed is None:
-        args.seed = random.randrange(1e6)
-
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
 
     # dealing with slurm. do this first!! before anything else other than seed setting, which we want to override
     if args.slurm_id is not None:
@@ -576,12 +573,12 @@ def adjust_args(args):
     if args.model_path is not None and args.model_config_path is not None:
         with open(args.model_config_path) as f:
             config = json.load(f)
-        args.N = config['N']
-        args.D = config['D']
-        args.L = config['L']
-        args.Z = config['Z']
-        args.bias = config['bias']
-        args.reservoir_seed = config['reservoir_seed']
+        args = fill_undefined_args(args, config, overwrite_none=True)
+        enforce_same = ['N', 'D', 'L', 'Z', 'T', 'bias']
+        for v in enforce_same:
+            if v in config and args.__dict__[v] != config[v]:
+                print(f'Warning: based on config, changed {v} from {args.__dict__[v]} -> {config[v]}')
+                args.__dict__[v] = config[v]
 
     # shortcut for specifying train everything including reservoir
     if args.train_parts == ['all']:
@@ -609,6 +606,16 @@ def adjust_args(args):
         args.loss = 'goals'
 
     args.argv = sys.argv
+
+    # setting seeds
+    if args.reservoir_seed is None:
+        args.reservoir_seed = random.randrange(1e6)
+    if args.seed is None:
+        args.seed = random.randrange(1e6)
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # initializing logging
     # do this last, because we will be logging previous parameters into the config file

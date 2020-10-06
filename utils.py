@@ -48,7 +48,6 @@ def fill_undefined_args(args, default_args, overwrite_none=False, to_bunch=False
     else:
         args_dict = args.__dict__
     for k in default_args.keys():
-        k_absent = k not in args_dict
         if k not in args_dict:
             args_dict[k] = default_args[k]
         elif overwrite_none and args_dict[k] is None:
@@ -60,6 +59,11 @@ def fill_undefined_args(args, default_args, overwrite_none=False, to_bunch=False
 
 
 # produce run id and create log directory
+# config is the configuration file for the run
+# log_dir is usually 'logs'
+# log_name is the parent name of the run/type of run
+# checkpoints is whether we want to save checkpoints
+# use_id is deprecated
 def log_this(config, log_dir, log_name=None, checkpoints=False, use_id=True):
     run_id = str(int(time.time() * 100))[-7:]
     config.run_id = run_id

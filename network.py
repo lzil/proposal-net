@@ -15,8 +15,10 @@ from helpers import get_output_activation
 
 RESERVOIR_ARGS = {
     'D': 5,
-    'N': 20,
+    'N': 50,
     'Z': 2,
+    'L': 2,
+    'T': 2,
     'res_init_type': 'gaussian',
     'res_init_params': {'std': 1.5},
     'res_burn_steps': 200,
@@ -52,40 +54,37 @@ class Reservoir(nn.Module):
         args = fill_undefined_args(args, RESERVOIR_ARGS, to_bunch=True)
         self.args = copy.deepcopy(args)
 
-        if not hasattr(args, 'reservoir_seed'):
-            self.args.reservoir_seed = random.randrange(1e6)
-        if not hasattr(args, 'reservoir_x_seed'):
-            self.args.reservoir_x_seed = np.random.randint(1e6)
+        # if not hasattr(args, 'reservoir_seed'):
+        #     self.args.reservoir_seed = random.randrange(1e6)
+        if not hasattr(args, 'res_x_seed'):
+            self.args.res_x_seed = np.random.randint(1e6)
 
-        self.J = nn.Linear(args.N, args.N, bias=False)
-        self.W_u = nn.Linear(args.D, args.N, bias=False)
+        # self.J = nn.Linear(args.N, args.N, bias=False)
         self.activation = torch.tanh
         self.tau_x = 10
 
         self.n_burn_in = self.args.res_burn_steps
-        self.reservoir_x_seed = self.args.reservoir_x_seed
+        self.res_x_seed = self.args.res_x_seed
 
         self.noise_std = args.res_noise
 
-        # check whether we want to load parts of reservoir from somewhere else
+        # check whether we want to load reservoir from somewhere else
         if args.model_path is not None:
-            pass
-        elif args.reservoir_path is not None:
-            J, W_u = load_rb(args.reservoir_path)
-            self.J.weight.data = J
-            self.W_u.weight.data = W_u
+            self.load_state_dict(torch.load(args.model_path))
         else:
-            self._init_J(args.res_init_type, args.res_init_params)
+            self._init_vars(args.res_init_type, args.res_init_params)
 
         self.reset()
 
-    def _init_J(self, init_type, init_params):
+    def _init_vars(self, init_type, init_params):
         if init_type == 'gaussian':
-            rng_pt = torch.get_rng_state()
-            torch.manual_seed(self.args.reservoir_seed)
+            # rng_pt = torch.get_rng_state()
+            # torch.manual_seed(self.args.reservoir_seed)
+            self.W_u = nn.Linear(self.args.D, self.args.N, bias=False)
+            self.W_u.weight.data = torch.normal(0, init_params['std'], self.W_u.shape) / np.sqrt(self.args.N)
+            self.J = nn.Linear(self.args.N, self.args.N, bias=False)
             self.J.weight.data = torch.normal(0, init_params['std'], self.J.weight.shape) / np.sqrt(self.args.N)
-            self.W_u.weight.data = torch.normal(0, init_params['std'], self.W_u.weight.shape) / np.sqrt(self.args.N)
-            torch.set_rng_state(rng_pt)
+            # torch.set_rng_state(rng_pt)
         else:
             raise NotImplementedError
 
@@ -121,7 +120,7 @@ class Reservoir(nn.Module):
             self.x = torch.normal(0, 1, (1, self.args.N))
         elif res_state is None:
             # load specified hidden state from seed
-            res_state = self.reservoir_x_seed
+            res_state = self.res_x_seed
         
         if type(res_state) is int:
             # if any seed set, set the net to that seed and burn in
@@ -143,36 +142,52 @@ class BasicNetwork(nn.Module):
         super().__init__()
         args = fill_undefined_args(args, BASIC_ARGS, to_bunch=True)
         self.args = args
-        self.reservoir = Reservoir(args)
+        
+        # self.stride = args.stride
+        # self.stride_step = 0
+        if self.args.model_path is not None:
+            self.load_state_dict(torch.load(args.model_path))
+        else:
+            if not hasattr(self.args, 'network_seed'):
+                self.args.network_seed = random.randrange(1e6)
+            self._init_vars()
 
-        self.stride = args.stride
-        self.stride_step = 0
-
-        self.W_f = nn.Linear(self.args.L, self.args.D, bias=args.bias)
-        self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=args.bias)
-
+        self.out_act = get_output_activation(self.args)
         self.network_delay = args.network_delay
 
         self.reset()
 
+    def _init_vars(self):
+        rng_pt = torch.get_rng_state()
+        torch.manual_seed(self.args.network_seed)
+        self.W_f = nn.Linear(self.args.L, self.args.D, bias=self.args.bias)
+        if self.args.use_reservoir:
+            self.reservoir = Reservoir(self.args)
+            self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
+        else:
+            self.W_ro = nn.Linear(self.args.D, self.args.Z, bias=self.args.bias)
+        torch.set_rng_state(rng_pt)
+
     def forward(self, o, extras=False):
+        # pass through the forward part
         u = self.W_f(o.reshape(-1, self.args.L))
 
-        self.stride_step += 1
-        if self.stride_step % self.stride == 0:
-            x = self.reservoir(u)
-            self.stride_step = 0
-        else:
-            x = self.reservoir(-1)
-            if x.shape[0] != u.shape[0]:
-                # to expand hidden layer to appropriate batch size
-                mul = u.shape[0]
-                x = x.repeat((mul, 1))
+        x = self.reservoir(u)
+
+        # self.stride_step += 1
+        # if self.stride_step % self.stride == 0:
+        #     x = self.reservoir(u)
+        #     self.stride_step = 0
+        # else:
+        #     x = self.reservoir(-1)
+        #     if x.shape[0] != u.shape[0]:
+        #         # to expand hidden layer to appropriate batch size
+        #         mul = u.shape[0]
+        #         x = x.repeat((mul, 1))
 
         z = self.W_ro(x)
-        fn = get_output_activation(self.args)
-        z = fn(z)
-        #z = nn.ReLU()(z)
+        z = self.out_act(z)
+
         if self.network_delay > 0:
             z_delayed = self.delay_output[self.delay_ind]
             self.delay_output[self.delay_ind] = z
@@ -187,7 +202,7 @@ class BasicNetwork(nn.Module):
         self.reservoir.reset(res_state=res_state)
         # set up network delay mechanism. essentially a queue of length network_delay
         # with a pointer to the current index
-        if self.network_delay != 0:
+        if self.network_delay > 0:
             self.delay_output = [None] * self.network_delay
             self.delay_ind = 0
 
@@ -199,19 +214,16 @@ class Simulator(nn.Module):
         super().__init__()
         self.args = args
 
-        if not hasattr(args, 'simulator_seed'):
-            self.args.simulator_seed = random.randrange(1e6)
-
-        rng_pt = torch.get_rng_state()
-        torch.manual_seed(self.args.simulator_seed)
         self.W_sim = nn.Sequential(
             nn.Linear(self.args.L + self.args.D, 16),
             nn.ReLU(),
             nn.Linear(16, self.args.T)
         )
-        torch.set_rng_state(rng_pt)
 
     def forward(self, s, p):
+        # in case we're working with a batch of unknown size
+        if len(s.shape) + 1 == len(p.shape):
+            s = s.unsqueeze(0)
         inp = torch.cat([s, p], dim=-1)
         pred = self.W_sim(inp)
 
@@ -229,8 +241,13 @@ class Hypothesizer(nn.Module):
         self.W_sample = nn.Linear(self.args.L + self.args.T, self.args.D)
 
     def forward(self, t, s):
-        inp = torch.cat([t, s], axis=1)
-        inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
+        # in case we're working with a batch of unknown size
+        if len(s.shape) + 1 == len(t.shape):
+            mul = t.shape[0]
+            self.s = self.s.repeat((mul, 1))
+        inp = torch.cat([t, s], dim=-1)
+        if self.sample_std > 0:
+            inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
         pred = self.W_sample(inp)
 
         return pred
@@ -243,27 +260,31 @@ class StateNet(nn.Module):
         args = fill_undefined_args(args, BASIC_ARGS, to_bunch=True)
         self.args = args
 
-        self.hypothesizer = Hypothesizer(args)
-        self.reservoir = Reservoir(args)
-
-        self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
-
-        if args.model_path is not None:
-            model = torch.load(args.model_path)
-            self.load_state_dict(model)
+        if self.args.model_path is not None:
+            self.load_state_dict(torch.load(args.model_path))
+        else:
+            if not hasattr(self.args, 'network_seed'):
+                self.args.network_seed = random.randrange(1e6)
+            self._init_vars()
 
         self.reset()
 
+    def _init_vars(self):
+        self.hypothesizer = Hypothesizer(self.args)
+        if args.use_reservoir:
+            self.reservoir = Reservoir(self.args)
+            self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
+        else:
+            self.W_ro = nn.Linear(self.args.D, self.args.Z, bias=self.args.bias)
+
+
     def forward(self, t, extras=False):
-        # when we are using batches, we get different shapes with initial self.s
-        if len(t.shape) != len(self.s.shape):
-            mul = t.shape[0]
-            self.s = self.s.repeat((mul, 1))
         prop = self.hypothesizer(t, self.s)
 
-        for i in range(self.args.res_frequency):
-            x = self.reservoir(prop)
-            prop = prop * self.args.res_input_decay
+        if self.args.use_reservoir:
+            for i in range(self.args.res_frequency):
+                x = self.reservoir(prop)
+                prop = prop * self.args.res_input_decay
 
         z = self.W_ro(x)
         # clipping so movements can't be too large
@@ -274,7 +295,8 @@ class StateNet(nn.Module):
         return self.s
 
     def reset(self, res_state=None):
-        self.reservoir.reset(res_state=res_state)
+        if self.args.use_reservoir:
+            self.reservoir.reset(res_state=res_state)
         # initial condition
         self.s = torch.zeros(self.args.Z)
 
@@ -288,32 +310,35 @@ class HypothesisNet(nn.Module):
         args = fill_undefined_args(args, HYPOTHESISNET_ARGS, to_bunch=True)
         self.args = args
 
-        self.hypothesizer = Hypothesizer(args)
-        self.simulator = Simulator(args)
-        self.reservoir = Reservoir(args)
+        if self.args.model_path is not None:
+            self.load_state_dict(torch.load(args.model_path))
+        else:
+            if not hasattr(args, 'network_seed'):
+                self.args.network_seed = random.randrange(1e6)
+            self._init_vars()
 
-
-        if not hasattr(args, 'W_ro_seed'):
-            self.args.W_ro_seed = random.randrange(1e6)
-
+    def _init_vars(self):
         rng_pt = torch.get_rng_state()
-        torch.manual_seed(self.args.W_ro_seed)
-        self.W_ro = nn.Linear(args.N, args.Z, bias=args.bias)
+        torch.manual_seed(self.args.network_seed)
+        self.hypothesizer = Hypothesizer(self.args)
+        self.simulator = Simulator(self.args)
+        if self.args.use_reservoir:
+            self.reservoir = Reservoir(self.args)
+            self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
+        else:
+            self.W_ro = nn.Linear(self.args.D, self.args.Z, bias=self.args.bias)
         torch.set_rng_state(rng_pt)
 
-        self.reset()
-
-    def forward(self, t):
+    def forward(self, t, extras=False):
         fail_count = 0
         while True:
             prop = self.hypothesizer(t, self.s)
-            sim = self.simulator(prop, self.s)
-
+            sim = self.simulator(self.s, prop)
 
             # test the sim here
             #cos_ang = torch.dot(sim/sim.norm(), t/t.norm())
-            cur_dist = torch.norm(t - self.s)
-            prop_dist = torch.norm(t - sim)
+            cur_dist = torch.norm(t - self.s, dim=-1)
+            prop_dist = torch.norm(t - sim, dim=-1)
 
             #dx_ratio = (cur_dist - torch.norm(t - sim)) / cur_dist
             if prop_dist < cur_dist:
@@ -322,9 +347,8 @@ class HypothesisNet(nn.Module):
             # if cos_ang * dx_ratio >= 1:
             #     break
             fail_count += 1
-            print('failed', cos_ang,dx_ratio)
-            pdb.set_trace()
-            if fail_count >= 1000:
+            print('failed', cur_dist.item(), prop_dist.item())
+            if fail_count >= 100:
                 print('really failed here')
                 pdb.set_trace()
 
