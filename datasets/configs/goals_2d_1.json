@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "dataset.py",
+    "create",
+    "goals_2d_1",
+    "-t",
+    "goals"
+  ],
+  "t_type": "goals",
+  "n_trials": 1000,
+  "t_len": 200,
+  "n_goals": 10,
+  "scale": 5,
+  "dim": 2
+}

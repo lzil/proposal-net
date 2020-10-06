@@ -1,2 +1,1 @@
-# reservoir-input
-reservoir input project
+# proposal-net

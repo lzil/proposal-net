@@ -1,8 +1,0 @@
-{
-  "t_type": "copy_motifs",
-  "n_trials": 1000,
-  "t_len": 200,
-  "delay": 0,
-  "pause": 10,
-  "amp": 0.1
-}

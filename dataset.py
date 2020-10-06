@@ -27,76 +27,14 @@ def create_dataset(args):
     trial_args = args.trial_args
 
     config = {}
+    config['argv'] = sys.argv
     config['t_type'] = t_type
     config['n_trials'] = n_trials
     config['t_len'] = t_len
 
     trials = []
 
-    if t_type == 'rsg':
-        '''
-        trial_args options:
-        - use_ints
-        - lt [x]
-        - gt [x]
-        - scale [x]
-
-        '''
-        # use_ints is overridden by rsg_intervals
-        use_ints = 'use_ints' in trial_args
-        if args.rsg_intervals is None:
-            # amount of time in between ready and set cues
-            min_t = get_args_val(trial_args, 'gt', 15, int)
-            max_t = get_args_val(trial_args, 'lt', t_len // 2 - 15, int)
-            config['min_t'] = min_t
-            config['max_t'] = max_t
-        for n in range(n_trials):
-            if args.rsg_intervals is None:
-                if use_ints:
-                    t_p = np.random.randint(min_t, max_t)
-                else:
-                    t_p = np.round(np.random.uniform(min_t, max_t), 2)
-            else:
-                # use one of the intervals that we desire
-                # overrides use_ints
-                num = random.choice(args.rsg_intervals)
-                assert num < t_len / 2
-                t_p = num
-
-            if use_ints:
-                ready_time = np.random.randint(5, t_len - t_p * 2 - 10)
-            else:
-                ready_time = np.round(np.random.uniform(5, t_len - t_p * 2 - 10), 2)
-                
-            set_time = ready_time + t_p
-            go_time = set_time + t_p
-
-            # output 0s and 1s instead of pdf, use with CrossEntropyLoss
-            if 'delta' in trial_args:
-                config['scale'] = 'DELTA'
-                trial_x = np.zeros((t_len))
-                trial_y = np.zeros((t_len))
-                
-                trial_x[ready_time-1:ready_time+2] = 1
-                trial_x[set_time-1:set_time+2] = 1
-                trial_y[go_time-2:go_time+3] = 1
-            else:
-                # check if width of gaussian is changed from default
-                scale = get_args_val(trial_args, 'scale', 1, float)
-                config['scale'] = scale
-
-                trial_range = np.arange(t_len)
-                trial_x = norm.pdf(trial_range, loc=ready_time, scale=1)
-                trial_x += norm.pdf(trial_range, loc=set_time, scale=1)
-                # scaling by `scale` so the height of the middle is always the same
-                trial_y = 4 * scale * norm.pdf(trial_range, loc=go_time, scale=scale)
-
-            info = (ready_time, set_time, go_time)
-
-            trials.append((trial_x, trial_y, info))
-
-
-    elif t_type.startswith('copy'):
+    if t_type.startswith('copy'):
         delay = get_args_val(trial_args, 'delay', 0, int)
         config['delay'] = delay
         
@@ -174,28 +112,6 @@ def create_dataset(args):
 
             trials.append((y, z, delay))
 
-    elif t_type == 'amplify':
-        n_freqs = get_args_val(trial_args, 'n_freqs', 15, int)
-        f_range = get_args_val(trial_args, 'f_range', [3, 30], float, n_vals=2)
-        amp = get_args_val(trial_args, 'amp', 1, float)
-        mag = get_args_val(trial_args, 'mag', 1, float)
-        config['n_freqs'] = n_freqs
-        config['f_range'] = f_range
-        config['amp'] = amp
-        config['mag'] = mag
-
-        for n in range(n_trials):
-            x = np.arange(0, t_len)
-            y = np.zeros_like(x)
-
-            freqs = np.random.uniform(f_range[0], f_range[1], (n_freqs))
-            amps = np.random.uniform(-amp, amp, (n_freqs))
-            for i in range(n_freqs):
-                y = y + amps[i] * np.cos(1/freqs[i] * x)
-
-            z = y * mag
-            trials.append((y, z, mag))
-
     elif t_type == 'integration':
         n_freqs = get_args_val(trial_args, 'n_freqs', 15, int)
         f_range = get_args_val(trial_args, 'f_range', [3, 30], float, n_vals=2)
@@ -223,7 +139,7 @@ def create_dataset(args):
 
             trials.append((y, z, z_mag))
 
-    elif t_type == 'seq-goals':
+    elif t_type == 'goals':
         n_goals = get_args_val(trial_args, 'n_goals', 10, int)
         scale = get_args_val(trial_args, 'scale', 5, float)
         dim = get_args_val(trial_args, 'dim', 2, int)
@@ -246,9 +162,9 @@ def get_args_val(args, name, default, dtype, n_vals=1):
         if n_vals == 1:
             val = dtype(args[idx + 1])
         else:
-            vals = []
+            val = []
             for i in range(1, n_vals+1):
-                vals.append(dtype(args[idx + i]))
+                val.append(dtype(args[idx + i]))
     else:
         val = default
     return val
@@ -266,14 +182,13 @@ def save_dataset(dset, name, config=None):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', default='load')
-    parser.add_argument('name')
-    parser.add_argument('-t', '--trial_type', default='rsg')
-    parser.add_argument('--rsg_intervals', nargs='*', type=int, default=None)
-    parser.add_argument('--motifs', type=str, help='path to motifs')
+    parser.add_argument('mode', default='load', choices=['load', 'create'], help='do you want to create or load a dataset?')
+    parser.add_argument('name', help='name of the dataset to either create or load')
+    parser.add_argument('-t', '--trial_type', default='goals', help='the type of task')
     parser.add_argument('-a', '--trial_args', nargs='*', help='terms to specify parameters of trial type')
-    parser.add_argument('-l', '--trial_len', type=int, default=200)
-    parser.add_argument('-n', '--n_trials', type=int, default=1000)
+    parser.add_argument('-n', '--n_trials', type=int, default=1000, help='number of trials in this dataset')
+    parser.add_argument('-l', '--trial_len', type=int, default=200, help='length of trial for copy task')
+    parser.add_argument('--motifs', type=str, help='path to motifs for the copy task')
     args = parser.parse_args()
 
     if args.trial_args is None:

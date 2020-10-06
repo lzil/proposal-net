@@ -19,7 +19,7 @@ import copy
 from network import BasicNetwork, StateNet, Reservoir
 
 from utils import log_this, load_rb
-from helpers import get_optimizer, get_criterion, seq_goals_loss, update_seq_indices, get_x_y
+from helpers import get_optimizer, get_criterion, goals_loss, update_goal_indices, get_x_y
 
 class Trainer:
     def __init__(self, args):
@@ -136,7 +136,7 @@ class Trainer:
 
         elif mode == 'scipy':
 
-            if self.args.dset_type == 'seq-goals':
+            if self.args.dset_type == 'goals':
                 targets = torch.Tensor(self.dset)
             else:
                 dset = np.asarray([x[:-1] for x in self.dset])
@@ -166,15 +166,15 @@ class Trainer:
                 total_loss = torch.tensor(0.)
 
                 # running through the dataset and getting gradients
-                if self.args.dset_type == 'seq-goals':
+                if self.args.dset_type == 'goals':
                     n_pts = len(self.dset[0])
                     cur_indices = [0 for i in range(len(self.dset))]
-                    for j in range(self.args.seq_goals_timesteps):
+                    for j in range(self.args.goals_timesteps):
                         net_in = targets[torch.arange(len(self.dset)),cur_indices,:]
                         net_out, step_loss, extras = self.run_iteration(net_in, net_in)
                         ins.append(net_in.numpy())
                         outs.append(net_out.detach().squeeze().numpy())
-                        cur_indices = update_seq_indices(targets, cur_indices, extras[-1])
+                        cur_indices = update_goal_indices(targets, cur_indices, extras[-1])
 
                 else:
                     for j in range(x.shape[1]):
@@ -212,17 +212,17 @@ class Trainer:
                         outs = []
                         total_loss = torch.tensor(0.)
 
-                        if self.args.dset_type == 'seq-goals':
+                        if self.args.dset_type == 'goals':
                             done = []
                             ins = []
                             n_pts = len(self.dset[0])
                             cur_index = 0
-                            for j in range(self.args.seq_goals_timesteps):
+                            for j in range(self.args.goals_timesteps):
                                 net_in = targets[sample_n,cur_index,:]
                                 net_out, step_loss, extras = self.run_iteration(net_in, net_in)
                                 ins.append(net_in.numpy())
                                 outs.append(net_out.detach().squeeze().numpy())
-                                cur_index = update_seq_indices(x, cur_index, extras[-1])
+                                cur_index = update_goal_indices(x, cur_index, extras[-1])
                                 total_loss += step_loss
                             pdb.set_trace()
                             self.log_checkpoint(self.scipy_ix, np.array(ins), np.array(ins), np.array(outs), total_loss.item(), total_loss.item())
@@ -296,14 +296,17 @@ class Trainer:
         outs = []
         total_loss = torch.tensor(0.)
 
-        if self.args.dset_type == 'seq-goals':
+        # ins is actual input into the network
+        # targets is desired output
+        # outs is output of network
+        if self.args.dset_type == 'goals':
             ins = []
-            goals = x
+            targets = x
             cur_idx = torch.zeros(x.shape[0], dtype=torch.long)
-            for j in range(self.args.seq_goals_timesteps):
+            for j in range(self.args.goals_timesteps):
                 net_out, step_loss, extras, cur_idx = self.run_iter_goal(x, cur_idx)
                 # what we need to record for logging
-                ins.append(extras[-2])
+                ins.append(extras['in'])
                 outs.append(net_out[-1].detach().numpy())
                 total_loss += step_loss
 
@@ -311,7 +314,7 @@ class Trainer:
 
         else:
             ins = x
-            goals = y
+            targets = y
             for j in range(x.shape[1]):
                 net_out, step_loss, extras = self.run_iter_traj(x[:,j], y[:,j])
                 if np.isnan(step_loss.item()):
@@ -323,10 +326,10 @@ class Trainer:
 
         etc = {
             'ins': ins,
-            'goals': goals,
+            'targets': targets,
             'outs': outs
         }
-        if self.args.dset_type == 'seq-goals':
+        if self.args.dset_type == 'goals':
             etc['indices'] = cur_idx
         return total_loss, etc
 
@@ -346,10 +349,9 @@ class Trainer:
         net_in = x_goal.reshape(-1, self.args.L)
         net_out, extras = self.net(net_in, extras=True)
         # the target is actually the input
-        step_loss, done = seq_goals_loss(net_out, net_in, threshold=args.seq_goals_threshold)
-        # hacky way to append the net_in and whether we hit the target to returns
-        extras.extend([net_in, done])
-        new_indices = update_seq_indices(x, indices, done)
+        step_loss, new_indices = goals_loss(net_out, x, indices, threshold=args.goals_threshold, update=True)
+        # hacky way to append the net_in
+        extras.update({'in': net_in})
 
         return net_out, step_loss, extras, new_indices
 
@@ -366,9 +368,9 @@ class Trainer:
             self.net.reset(self.args.reservoir_x_init)
             total_loss = torch.tensor(0.)
 
-            if self.args.dset_type == 'seq-goals':
+            if self.args.dset_type == 'goals':
                 cur_idx = torch.zeros(x.shape[0], dtype=torch.long)
-                for j in range(self.args.seq_goals_timesteps):
+                for j in range(self.args.goals_timesteps):
                     _, step_loss, _, cur_idx = self.run_iter_goal(x, cur_idx)
                     total_loss += step_loss
 
@@ -378,7 +380,7 @@ class Trainer:
                     total_loss += step_loss
 
         etc = {}
-        if self.args.dset_type == 'seq-goals':
+        if self.args.dset_type == 'goals':
             etc['indices'] = cur_idx
 
         return total_loss.item() / len(batch), etc
@@ -428,24 +430,24 @@ class Trainer:
                     outs = etc['outs']
                     z = np.stack(outs).squeeze()
                     # avg of the last 50 trials
-                    avg_loss = running_loss / self.log_interval
+                    avg_loss = running_loss / self.args.batch_size / self.log_interval
                     test_loss, test_etc = self.test()
                     avg_max_grad = running_mag / self.log_interval
                     log_arr = [
                         f'iteration {ix}',
-                        f'loss {avg_loss:.3f}',
+                        f'train loss {avg_loss:.3f}',
                         # f'max abs grad {avg_max_grad:.3f}',
                         f'test loss {test_loss:.3f}'
                     ]
-                    # calculating average index reached for seq-goals task
-                    if self.args.dset_type == 'seq-goals':
+                    # calculating average index reached for goals task
+                    if self.args.dset_type == 'goals':
                         avg_index = test_etc['indices'].float().mean().item()
                         log_arr.append(f'avg index {avg_index:.3f}')
                     log_str = '\t| '.join(log_arr)
                     logging.info(log_str)
 
                     if not self.args.no_log:
-                        self.log_checkpoint(ix, etc['ins'].numpy(), etc['goals'].numpy(), z, running_loss, avg_loss)
+                        self.log_checkpoint(ix, etc['ins'].numpy(), etc['targets'].numpy(), z, running_loss, avg_loss)
                     running_loss = 0.0
                     running_mag = 0.0
 
@@ -504,6 +506,7 @@ def parse_args():
     parser.add_argument('--res_init_gaussian_std', type=float, default=1.5)
     parser.add_argument('--res_frequency', type=int, default=1, help='number of reservoir steps per high level step')
     parser.add_argument('--res_input_decay', type=float, default=1, help='decay of proposal for each step without high level input')
+    parser.add_argument('--res_burn_steps', type=int, default=200, help='number of steps for reservoir to burn in')
     parser.add_argument('--network_delay', type=int, default=0)
     parser.add_argument('--res_noise', type=float, default=0)
     parser.add_argument('--no_bias', action='store_true')
@@ -512,9 +515,9 @@ def parse_args():
     parser.add_argument('--dataset', type=str, default='datasets/rsg2.pkl')
     parser.add_argument('--separate_test', action='store_true', help='use separate test set')
 
-    # seq-goals parameters
-    parser.add_argument('--seq_goals_timesteps', type=int, default=200, help='num timesteps to run seq goals dataset for')
-    parser.add_argument('--seq_goals_threshold', type=float, default=1, help='threshold for detection for seq goals')
+    # goals parameters
+    parser.add_argument('--goals_timesteps', type=int, default=200, help='num timesteps to run seq goals dataset for')
+    parser.add_argument('--goals_threshold', type=float, default=1, help='threshold for detection for seq goals')
 
     parser.add_argument('--optimizer', choices=['adam', 'sgd', 'rmsprop', 'lbfgs-scipy', 'lbfgs-pytorch'], default='lbfgs-scipy')
     parser.add_argument('--loss', type=str, default='mse')
@@ -533,7 +536,6 @@ def parse_args():
     parser.add_argument('--seed', type=int, help='seed for most of network')
     parser.add_argument('--reservoir_seed', type=int, help='seed for reservoir')
     parser.add_argument('--reservoir_x_seed', type=int, default=0, help='seed for reservoir init hidden states. -1 for zero init')
-    parser.add_argument('--reservoir_burn_steps', type=int, default=200, help='number of steps for reservoir to burn in')
 
     parser.add_argument('-x', '--reservoir_x_init', type=str, default=None, help='other seed options for reservoir')
 
@@ -594,8 +596,8 @@ def adjust_args(args):
             args.out_act = 'none'
 
     # set the dataset
-    if 'seq-goals' in args.dataset:
-        args.dset_type = 'seq-goals'
+    if 'goals' in args.dataset:
+        args.dset_type = 'goals'
     elif 'rsg' in args.dataset:
         args.dset_type = 'rsg'
     elif 'copy' in args.dataset:
@@ -603,9 +605,11 @@ def adjust_args(args):
     else:
         args.dset_type = 'unknown'
 
-    # use custom seq-goals loss for seq-goals dataset, override default loss fn
-    if args.dset_type == 'seq-goals':
-        args.loss = 'seq-goals'
+    # use custom goals loss for goals dataset, override default loss fn
+    if args.dset_type == 'goals':
+        args.loss = 'goals'
+
+    args.argv = sys.argv
 
     # initializing logging
     # do this last, because we will be logging previous parameters into the config file
@@ -638,7 +642,8 @@ def adjust_args(args):
 if __name__ == '__main__':
     args = parse_args()
 
-    args = adjust_args(args)   
+    args = adjust_args(args)
+    logging.info(f'Seeds:\n  general: {args.seed}\n  reservoir: {args.reservoir_seed}')
 
     trainer = Trainer(args)
     logging.info(f'Initialized trainer. Using optimizer {args.optimizer}.')

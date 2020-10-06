@@ -1,8 +1,0 @@
-{
-  "t_type": "seq-goals",
-  "n_trials": 1000,
-  "t_len": 200,
-  "n_goals": 15,
-  "scale": 10.0,
-  "dim": 2
-}

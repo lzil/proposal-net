@@ -25,8 +25,8 @@ def get_criterion(args):
         criterion = nn.MSELoss()
     elif args.loss == 'bce':
         criterion = nn.BCEWithLogitsLoss()
-    elif args.loss == 'seq-goals':
-        criterion = seq_goals_loss
+    elif args.loss == 'goals':
+        criterion = goals_loss
     return criterion
 
 def get_output_activation(args):
@@ -39,7 +39,8 @@ def get_output_activation(args):
     return fn
 
 # loss function for sequential goals
-def seq_goals_loss(out, target, threshold=1, reward=5):
+def goals_loss(out, targets, indices, threshold=1, update=True):
+    target = targets[torch.arange(targets.shape[0]),indices,:]
     if len(out.shape) > 1:
         dists = torch.norm(out - target, dim=1)
     else:
@@ -47,19 +48,20 @@ def seq_goals_loss(out, target, threshold=1, reward=5):
         dists = torch.norm(out - target, dim=0, keepdim=True)
 
     done = (dists < threshold) * 1
-    done_count = done.sum()
-    loss = torch.sum(dists) - done_count * reward
-
-    return loss, done
+    # update the indices while we're at it
+    if update:
+        indices = update_goal_indices(targets, indices, done)
+    loss = torch.sum(dists) - indices.sum()
+    return loss, indices
 
 # updating indices array to get the next targets for sequential goals
-def update_seq_indices(targets, indices, done):
+def update_goal_indices(targets, indices, done):
     indices = torch.clamp(indices + done, 0, len(targets[0]) - 1)
     return indices
 
 # given batch and dset name, get the x, y pairs and turn them into Tensors
 def get_x_y(batch, dset):
-    if 'seq-goals' in dset:
+    if 'goals' in dset:
         x = torch.Tensor(batch)
         y = x
     else:
