@@ -35,24 +35,24 @@ class Trainer:
             self.net = HypothesisNet(self.args)
 
         # load any specified model parameters into the network
-        if args.model_path is not None:
-            m_dict = torch.load(args.model_path)
-            self.net.load_state_dict(m_dict)
-            logging.info(f'Loaded model file from {args.model_path}.')
-        if args.Wf_path is not None:
-            m_dict = torch.load(args.Wf_path)
-            self.net.W_f.weight = m_dict['W_f.weight']
-            if 'W_f.bias' in m_dict:
-                self.net.W_f.bias = m_dict['W_f.bias']
-        if args.Wro_path is not None:
-            m_dict = torch.load(args.Wro_path)
-            self.net.W_ro.weight = m_dict['W_ro.weight']
-            if 'W_ro.bias' in m_dict:
-                self.net.W_ro.bias = m_dict['W_ro.bias']
-        if args.reservoir_path is not None:
-            m_dict = torch.load(args.Wro_path)
-            self.net.reservoir.J.weight = m_dict['reservoir.J.weight']
-            self.net.reservoir.W_u.weight = m_dict['reservoir.W_u.weight']
+        # if args.model_path is not None:
+        #     m_dict = torch.load(args.model_path)
+        #     self.net.load_state_dict(m_dict)
+        #     logging.info(f'Loaded model file from {args.model_path}.')
+        # if args.Wf_path is not None:
+        #     m_dict = torch.load(args.Wf_path)
+        #     self.net.W_f.weight = m_dict['W_f.weight']
+        #     if 'W_f.bias' in m_dict:
+        #         self.net.W_f.bias = m_dict['W_f.bias']
+        # if args.Wro_path is not None:
+        #     m_dict = torch.load(args.Wro_path)
+        #     self.net.W_ro.weight = m_dict['W_ro.weight']
+        #     if 'W_ro.bias' in m_dict:
+        #         self.net.W_ro.bias = m_dict['W_ro.bias']
+        # if args.reservoir_path is not None:
+        #     m_dict = torch.load(args.Wro_path)
+        #     self.net.reservoir.J.weight = m_dict['reservoir.J.weight']
+        #     self.net.reservoir.W_u.weight = m_dict['reservoir.W_u.weight']
 
         # getting number of elements of every parameter
         self.n_params = {}
@@ -486,15 +486,15 @@ class Trainer:
 
 def parse_args():
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('-L', type=int, default=1, help='latent input dimension')
-    parser.add_argument('-T', type=int, default=1, help='task dimension')
+    parser.add_argument('-L', type=int, default=2, help='latent input dimension')
+    parser.add_argument('-T', type=int, default=2, help='task dimension')
     parser.add_argument('-D', type=int, default=5, help='intermediate dimension')
     parser.add_argument('-N', type=int, default=50, help='number of neurons in reservoir')
-    parser.add_argument('-Z', type=int, default=1, help='output dimension')
+    parser.add_argument('-Z', type=int, default=2, help='output dimension')
 
     parser.add_argument('--net', type=str, default='basic', choices=['basic', 'state', 'hypothesis'])
 
-    parser.add_argument('--train_parts', type=str, nargs='+', default=['W_ro', 'W_f'])
+    parser.add_argument('--train_parts', type=str, nargs='+', default=[''])
     parser.add_argument('--stride', type=int, default=1, help='stride of the W_f')
     
     # make sure model_config path is specified if you use any paths! it ensures correct dimensions, bias, etc.
@@ -517,7 +517,7 @@ def parse_args():
     
     parser.add_argument('--out_act', type=str, default='none', help='output activation')
 
-    parser.add_argument('--dataset', type=str, default='datasets/goals_2d_1.pkl')
+    parser.add_argument('-d', '--dataset', type=str, default='datasets/goals_2d_1.pkl')
     parser.add_argument('--separate_test', action='store_true', help='use separate test set')
 
     # goals parameters
@@ -525,7 +525,7 @@ def parse_args():
     parser.add_argument('--goals_threshold', type=float, default=1, help='threshold for detection for seq goals')
 
     # optimization parameters
-    parser.add_argument('--optimizer', choices=['adam', 'sgd', 'rmsprop', 'lbfgs-scipy', 'lbfgs-pytorch'], default='lbfgs-scipy')
+    parser.add_argument('--optimizer', choices=['adam', 'sgd', 'rmsprop', 'lbfgs-scipy', 'lbfgs-pytorch'], default='adam')
     parser.add_argument('--loss', type=str, default='mse')
 
     # lbfgs-scipy arguments
@@ -536,15 +536,15 @@ def parse_args():
     parser.add_argument('--conv_type', type=str, choices=['patience', 'grad'], default='patience', help='how to determine convergence. adam only')
     parser.add_argument('--patience', type=int, default=1000, help='stop training if loss doesn\'t decrease. adam only')
     # parser.add_argument('--grad_threshold', type=float, default=1e-4, help='stop training if grad is less than certain amount. adam only')
-    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate. adam only')
+    parser.add_argument('--lr', type=float, default=1e-3, help='learning rate. adam only')
     parser.add_argument('--n_epochs', type=int, default=10, help='number of epochs to train for. adam only')
 
-    parser.add_argument('--seed', type=int, help='seed for most of network')
+    parser.add_argument('--seed', type=int, help='seed for everything else')
     parser.add_argument('--network_seed', type=int, help='seed for the network')
     # parser.add_argument('--reservoir_seed', type=int, help='seed for reservoir')
     parser.add_argument('--res_x_seed', type=int, default=0, help='seed for reservoir init hidden states. -1 for zero init')
 
-    parser.add_argument('-x', '--reservoir_x_init', type=str, default=None, help='other seed options for reservoir')
+    # parser.add_argument('-x', '--reservoir_x_init', type=str, default=None, help='other seed options for reservoir')
 
     parser.add_argument('--no_log', action='store_true')
     parser.add_argument('--log_interval', type=int, default=50)
@@ -601,10 +601,10 @@ def adjust_args(args):
     args.argv = sys.argv
 
     # setting seeds
-    if args.reservoir_seed is None:
-        args.reservoir_seed = random.randrange(1e6)
     if args.seed is None:
         args.seed = random.randrange(1e6)
+    if args.network_seed is None:
+        args.network_seed = random.randrange(1e6)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -631,15 +631,15 @@ def adjust_args(args):
     if args.model_path is not None:
         logging.info(f'Using model path {args.model_path}')
 
+    logging.info(f'Seeds:\n  general: {args.seed}\n  network: {args.network_seed}')
+
     return args
 
 
 if __name__ == '__main__':
     args = parse_args()
-
     args = adjust_args(args)
-    logging.info(f'Seeds:\n  general: {args.seed}\n  reservoir: {args.reservoir_seed}')
-
+    
     trainer = Trainer(args)
     logging.info(f'Initialized trainer. Using optimizer {args.optimizer}.')
     n_iters = 0
@@ -659,7 +659,7 @@ if __name__ == '__main__':
             labels_csv = ['slurm_id', 'D', 'N', 'bias', 'seed', 'rseed', 'xseed', 'rnoise', 'dset', 'niter', 'loss']
             vals_csv = [
                 args.slurm_id, args.D, args.N, args.bias, args.seed,
-                args.reservoir_seed, args.reservoir_x_seed, args.reservoir_noise,
+                args.network_seed, args.res_x_seed, args.res_noise,
                 args.dataset, n_iters, final_loss
             ]
             if args.optimizer == 'adam':

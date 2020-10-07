@@ -37,8 +37,7 @@ DEFAULT_ARGS = {
 class Reservoir(nn.Module):
     def __init__(self, args=DEFAULT_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
-        self.args = copy.deepcopy(args)
+        self.args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
 
         # if not hasattr(args, 'reservoir_seed'):
         #     self.args.reservoir_seed = random.randrange(1e6)
@@ -55,24 +54,22 @@ class Reservoir(nn.Module):
         self.noise_std = args.res_noise
 
         # check whether we want to load reservoir from somewhere else
-        if args.model_path is not None:
-            self.load_state_dict(torch.load(args.model_path))
-        else:
-            self._init_vars(args.res_init_type, args.res_init_params)
+        # if args.model_path is not None:
+        #     self.load_state_dict(torch.load(args.model_path))
+        # else:
+        self._init_vars()
 
         self.reset()
 
-    def _init_vars(self, init_type, init_params):
-        if init_type == 'gaussian':
-            # rng_pt = torch.get_rng_state()
-            # torch.manual_seed(self.args.reservoir_seed)
-            self.W_u = nn.Linear(self.args.D, self.args.N, bias=False)
-            self.W_u.weight.data = torch.normal(0, init_params['std'], self.W_u.shape) / np.sqrt(self.args.N)
-            self.J = nn.Linear(self.args.N, self.args.N, bias=False)
-            self.J.weight.data = torch.normal(0, init_params['std'], self.J.weight.shape) / np.sqrt(self.args.N)
-            # torch.set_rng_state(rng_pt)
-        else:
-            raise NotImplementedError
+    def _init_vars(self):
+        # rng_pt = torch.get_rng_state()
+        # torch.manual_seed(self.args.reservoir_seed)
+        self.W_u = nn.Linear(self.args.D, self.args.N, bias=False)
+        self.W_u.weight.data = torch.normal(0, self.args.res_init_std, self.W_u.weight.shape) / np.sqrt(self.args.N)
+        self.J = nn.Linear(self.args.N, self.args.N, bias=False)
+        self.J.weight.data = torch.normal(0, self.args.res_init_std, self.J.weight.shape) / np.sqrt(self.args.N)
+        # torch.set_rng_state(rng_pt)
+
 
     def burn_in(self, steps):
         for i in range(steps):
@@ -108,7 +105,7 @@ class Reservoir(nn.Module):
         elif res_state == 'random' or res_state == -2:
             # reset to totally random value without using reservoir seed
             self.x = torch.normal(0, 1, (1, self.args.N))
-        elif type(res_state) is int and res_state > 0:
+        elif type(res_state) is int and res_state >= 0:
             # if any seed set, set the net to that seed and burn in
             rng_pt = torch.get_rng_state()
             torch.manual_seed(res_state)
@@ -131,13 +128,13 @@ class BasicNetwork(nn.Module):
         
         # self.stride = args.stride
         # self.stride_step = 0
+       
+        if not hasattr(self.args, 'network_seed'):
+            self.args.network_seed = random.randrange(1e6)
+        self._init_vars()
         if self.args.model_path is not None:
             self.load_state_dict(torch.load(args.model_path))
-        else:
-            if not hasattr(self.args, 'network_seed'):
-                self.args.network_seed = random.randrange(1e6)
-            self._init_vars()
-
+        
         self.out_act = get_output_activation(self.args)
         self.network_delay = args.network_delay
 
@@ -155,6 +152,7 @@ class BasicNetwork(nn.Module):
         torch.set_rng_state(rng_pt)
 
     def forward(self, o, extras=False):
+        # pdb.set_trace()
         # pass through the forward part
         u = self.W_f(o.reshape(-1, self.args.L))
 
@@ -208,12 +206,19 @@ class Simulator(nn.Module):
 
     def forward(self, s, p):
         # in case we're working with a batch of unknown size
-        if len(s.shape) + 1 == len(p.shape):
-            s = s.unsqueeze(0)
+        # if len(s.shape) + 1 == len(p.shape):
+        #     s = s.unsqueeze(0)
+        s, p = adj_batch_dims(s, p)
         inp = torch.cat([s, p], dim=-1)
         pred = self.W_sim(inp)
 
         return pred
+
+# in case we're working with a batch of unknown size
+def adj_batch_dims(smaller, larger):
+    if len(smaller.shape) + 1 == len(larger.shape):
+        smaller = smaller.repeat((larger.shape[0], 1))
+    return (smaller, larger)
 
 # given current state and task, samples a proposal
 class Hypothesizer(nn.Module):
@@ -226,16 +231,12 @@ class Hypothesizer(nn.Module):
         # L dimensions for state, 2 dimensions for task (desired state)
         self.W_sample = nn.Linear(self.args.L + self.args.T, self.args.D)
 
-    def forward(self, t, s):
-        # in case we're working with a batch of unknown size
-        if len(s.shape) + 1 == len(t.shape):
-            mul = t.shape[0]
-            self.s = self.s.repeat((mul, 1))
-        inp = torch.cat([t, s], dim=-1)
+    def forward(self, s, t):
+        s, t = adj_batch_dims(s, t)
+        inp = torch.cat([s, t], dim=-1)
         if self.sample_std > 0:
             inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
         pred = self.W_sample(inp)
-
         return pred
 
 # has hypothesizer
@@ -246,18 +247,17 @@ class StateNet(nn.Module):
         args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         self.args = args
 
+        if not hasattr(self.args, 'network_seed'):
+            self.args.network_seed = random.randrange(1e6)
+        self._init_vars()
         if self.args.model_path is not None:
             self.load_state_dict(torch.load(args.model_path))
-        else:
-            if not hasattr(self.args, 'network_seed'):
-                self.args.network_seed = random.randrange(1e6)
-            self._init_vars()
 
         self.reset()
 
     def _init_vars(self):
         self.hypothesizer = Hypothesizer(self.args)
-        if args.use_reservoir:
+        if self.args.use_reservoir:
             self.reservoir = Reservoir(self.args)
             self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
         else:
@@ -265,7 +265,7 @@ class StateNet(nn.Module):
 
 
     def forward(self, t, extras=False):
-        prop = self.hypothesizer(t, self.s)
+        prop = self.hypothesizer(self.s, t)
 
         if self.args.use_reservoir:
             for i in range(self.args.res_frequency):
@@ -318,7 +318,7 @@ class HypothesisNet(nn.Module):
     def forward(self, t, extras=False):
         fail_count = 0
         while True:
-            prop = self.hypothesizer(t, self.s)
+            prop = self.hypothesizer(self.s, t)
             sim = self.simulator(self.s, prop)
 
             # test the sim here
