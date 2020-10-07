@@ -13,50 +13,36 @@ import sys
 from utils import Bunch, load_rb, fill_undefined_args
 from helpers import get_output_activation
 
-RESERVOIR_ARGS = {
+DEFAULT_ARGS = {
+    'L': 2,
+    'T': 2,
     'D': 5,
     'N': 50,
     'Z': 2,
-    'L': 2,
-    'T': 2,
+    'use_reservoir': True,
     'res_init_type': 'gaussian',
     'res_init_params': {'std': 1.5},
     'res_burn_steps': 200,
     'res_noise': 0,
-    'reservoir_path': None,
     'bias': True,
     'network_delay': 0,
     'out_act': 'none',
     'stride': 1,
     'model_path': None
 }
-SIMULATOR_ARGS = {
-    'L': 2,
-    'D': 5,
-    'T': 2,
-    'bias': True
-}
-HYPOTHESIZER_ARGS = {
-    'L': 2,
-    'D': 5,
-    'T': 2,
-    'bias': True,
-}
-BASIC_ARGS = RESERVOIR_ARGS
-HYPOTHESISNET_ARGS = {**RESERVOIR_ARGS, **SIMULATOR_ARGS, **HYPOTHESIZER_ARGS}
 
 # SIMULATOR_ARGS.reservoir_seed = 0
 
 # reservoir network. shouldn't be trained
 class Reservoir(nn.Module):
-    def __init__(self, args=RESERVOIR_ARGS):
+    def __init__(self, args=DEFAULT_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, RESERVOIR_ARGS, to_bunch=True)
+        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         self.args = copy.deepcopy(args)
 
         # if not hasattr(args, 'reservoir_seed'):
         #     self.args.reservoir_seed = random.randrange(1e6)
-        if not hasattr(args, 'res_x_seed'):
+        if not hasattr(self.args, 'res_x_seed'):
             self.args.res_x_seed = np.random.randint(1e6)
 
         # self.J = nn.Linear(args.N, args.N, bias=False)
@@ -112,24 +98,24 @@ class Reservoir(nn.Module):
         return self.x
 
     def reset(self, res_state=None, burn_in=True):
-        if res_state == 'zero':
-            # reset to 0
-            self.x = torch.zeros((1, self.args.N))
-        elif res_state == 'random':
-            # reset to totally random value without using reservoir seed
-            self.x = torch.normal(0, 1, (1, self.args.N))
-        elif res_state is None:
+        if res_state is None:
             # load specified hidden state from seed
             res_state = self.res_x_seed
-        
-        if type(res_state) is int:
+
+        if res_state == 'zero' or res_state == -1:
+            # reset to 0
+            self.x = torch.zeros((1, self.args.N))
+        elif res_state == 'random' or res_state == -2:
+            # reset to totally random value without using reservoir seed
+            self.x = torch.normal(0, 1, (1, self.args.N))
+        elif type(res_state) is int and res_state > 0:
             # if any seed set, set the net to that seed and burn in
             rng_pt = torch.get_rng_state()
             torch.manual_seed(res_state)
             self.x = torch.normal(0, 1, (1, self.args.N))
             torch.set_rng_state(rng_pt)
         else:
-            # load a particular hidden state
+            # load an actual particular hidden state
             # if there's an error here then highly possible that res_state has wrong form
             self.x = torch.from_numpy(res_state).float()
 
@@ -138,9 +124,9 @@ class Reservoir(nn.Module):
 
 # doesn't have hypothesizer or simulator
 class BasicNetwork(nn.Module):
-    def __init__(self, args=BASIC_ARGS):
+    def __init__(self, args=DEFAULT_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, BASIC_ARGS, to_bunch=True)
+        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         self.args = args
         
         # self.stride = args.stride
@@ -209,8 +195,8 @@ class BasicNetwork(nn.Module):
 
 # given state and action, predicts next state
 class Simulator(nn.Module):
-    def __init__(self, args=SIMULATOR_ARGS):
-        args = fill_undefined_args(args, SIMULATOR_ARGS, to_bunch=True)
+    def __init__(self, args=DEFAULT_ARGS):
+        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         super().__init__()
         self.args = args
 
@@ -255,9 +241,9 @@ class Hypothesizer(nn.Module):
 # has hypothesizer
 # doesn't have the simulator because the truth is just given to the network
 class StateNet(nn.Module):
-    def __init__(self, args=BASIC_ARGS):
+    def __init__(self, args=DEFAULT_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, BASIC_ARGS, to_bunch=True)
+        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         self.args = args
 
         if self.args.model_path is not None:
@@ -305,9 +291,9 @@ class StateNet(nn.Module):
 
 # captures the hypothesis generator and simulator into a single class
 class HypothesisNet(nn.Module):
-    def __init__(self, args=HYPOTHESISNET_ARGS):
+    def __init__(self, args=DEFAULT_ARGS):
         super().__init__()
-        args = fill_undefined_args(args, HYPOTHESISNET_ARGS, to_bunch=True)
+        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         self.args = args
 
         if self.args.model_path is not None:
@@ -356,16 +342,17 @@ class HypothesisNet(nn.Module):
         pdb.set_trace()
         u = prop
 
-        self.stride_step += 1
-        if self.stride_step % self.stride == 0:
-            x = self.reservoir(u)
-            self.stride_step = 0
-        else:
-            x = self.reservoir(-1)
-            if x.shape[0] != u.shape[0]:
-                # to expand hidden layer to appropriate batch size
-                mul = u.shape[0]
-                x = x.repeat((mul, 1))
+        x = self.reservoir(u)
+        # self.stride_step += 1
+        # if self.stride_step % self.stride == 0:
+        #     x = self.reservoir(u)
+        #     self.stride_step = 0
+        # else:
+        #     x = self.reservoir(-1)
+        #     if x.shape[0] != u.shape[0]:
+        #         # to expand hidden layer to appropriate batch size
+        #         mul = u.shape[0]
+        #         x = x.repeat((mul, 1))
 
         z = self.W_ro(x)
         pdb.set_trace()

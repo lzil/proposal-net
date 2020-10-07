@@ -12,7 +12,7 @@ import re
 import os
 import json
 
-from utils import load_rb, fill_undefined_args
+from utils import load_rb, fill_undefined_args, get_config
 from testers import load_model_path, test_model
 
 # for plotting some instances of a trained model on a specified dataset
@@ -36,12 +36,7 @@ with open(args.model, 'rb') as f:
     model = torch.load(f)
 
 # assuming config is in the same folder as the model
-head, tail = os.path.split(args.model)
-run_id = re.split('_|\.', tail)[1]
-config_path = os.path.join(head, 'config_'+run_id+'.json')
-
-with open(config_path, 'r') as f:
-    config = json.load(f)
+config = get_config(args.model)
 
 if args.noise != 0:
     J = model['W_f.weight']

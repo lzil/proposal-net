@@ -18,7 +18,7 @@ import copy
 
 from network import BasicNetwork, StateNet, Reservoir, HypothesisNet
 
-from utils import log_this, load_rb, fill_undefined_args
+from utils import log_this, load_rb, fill_undefined_args, get_config
 from helpers import get_optimizer, get_criterion, goals_loss, update_goal_indices, get_x_y
 
 class Trainer:
@@ -401,7 +401,7 @@ class Trainer:
         running_no_min = 0
 
         running_loss = 0.0
-        running_mag = 0.0
+        # running_mag = 0.0
         ending = False
         for e in range(self.args.n_epochs):
             np.random.shuffle(self.train_set)
@@ -425,8 +425,8 @@ class Trainer:
                     break
 
                 running_loss += loss.item()
-                mag = max([torch.max(torch.abs(p.grad)) for p in self.train_params])
-                running_mag += mag             
+                # mag = max([torch.max(torch.abs(p.grad)) for p in self.train_params])
+                # running_mag += mag             
 
                 if ix % self.log_interval == 0:
                     outs = etc['outs']
@@ -434,7 +434,7 @@ class Trainer:
                     # avg of the last 50 trials
                     avg_loss = running_loss / self.args.batch_size / self.log_interval
                     test_loss, test_etc = self.test()
-                    avg_max_grad = running_mag / self.log_interval
+                    # avg_max_grad = running_mag / self.log_interval
                     log_arr = [
                         f'iteration {ix}',
                         f'train loss {avg_loss:.3f}',
@@ -463,10 +463,10 @@ class Trainer:
                         if running_no_min > self.args.patience:
                             logging.info(f'iteration {ix}: no min for {args.patience} samples. ending')
                             ending = True
-                    elif self.args.conv_type == 'grad':
-                        if avg_max_grad < self.args.grad_threshold:
-                            logging.info(f'iteration {ix}: max absolute grad < {args.grad_threshold}. ending')
-                            ending = True
+                    # elif self.args.conv_type == 'grad':
+                    #     if avg_max_grad < self.args.grad_threshold:
+                    #         logging.info(f'iteration {ix}: max absolute grad < {args.grad_threshold}. ending')
+                    #         ending = True
                 if ending:
                     break
             logging.info(f'Finished dataset epoch {e+1}')
@@ -498,31 +498,33 @@ def parse_args():
     parser.add_argument('--stride', type=int, default=1, help='stride of the W_f')
     
     # make sure model_config path is specified if you use any paths! it ensures correct dimensions, bias, etc.
-    parser.add_argument('--model_config_path', type=str, default=None, help='config path corresponding to model load path')
+    # parser.add_argument('--model_config_path', type=str, default=None, help='config path corresponding to model load path')
     parser.add_argument('--model_path', type=str, default=None, help='start training from certain model. superseded by below')
-    parser.add_argument('--Wro_path', type=str, default=None, help='start training from certain Wro')
-    parser.add_argument('--Wf_path', type=str, default=None, help='start training from certain Wf')
-    parser.add_argument('--reservoir_path', type=str, default=None, help='saved reservoir. should be saved with seed tho')
+    # parser.add_argument('--Wro_path', type=str, default=None, help='start training from certain Wro')
+    # parser.add_argument('--Wf_path', type=str, default=None, help='start training from certain Wf')
+    # parser.add_argument('--reservoir_path', type=str, default=None, help='saved reservoir. should be saved with seed tho')
     # parser.add_argument('--simulator_path', type=str, default=None, help='saved simulator')
     
     parser.add_argument('--no_reservoir', action='store_true', help='leave out the reservoir completely')
-    parser.add_argument('--res_init_type', type=str, default='gaussian', help='')
-    parser.add_argument('--res_init_gaussian_std', type=float, default=1.5)
+    parser.add_argument('--no_bias', action='store_true')
+
+    parser.add_argument('--res_init_std', type=float, default=1.5)
     parser.add_argument('--res_frequency', type=int, default=1, help='number of reservoir steps per high level step')
     parser.add_argument('--res_input_decay', type=float, default=1, help='decay of proposal for each step without high level input')
     parser.add_argument('--res_burn_steps', type=int, default=200, help='number of steps for reservoir to burn in')
     parser.add_argument('--network_delay', type=int, default=0)
     parser.add_argument('--res_noise', type=float, default=0)
-    parser.add_argument('--no_bias', action='store_true')
-    parser.add_argument('--out_act', type=str, default=None, help='output activation')
+    
+    parser.add_argument('--out_act', type=str, default='none', help='output activation')
 
-    parser.add_argument('--dataset', type=str, default='datasets/rsg2.pkl')
+    parser.add_argument('--dataset', type=str, default='datasets/goals_2d_1.pkl')
     parser.add_argument('--separate_test', action='store_true', help='use separate test set')
 
     # goals parameters
     parser.add_argument('--goals_timesteps', type=int, default=200, help='num timesteps to run seq goals dataset for')
     parser.add_argument('--goals_threshold', type=float, default=1, help='threshold for detection for seq goals')
 
+    # optimization parameters
     parser.add_argument('--optimizer', choices=['adam', 'sgd', 'rmsprop', 'lbfgs-scipy', 'lbfgs-pytorch'], default='lbfgs-scipy')
     parser.add_argument('--loss', type=str, default='mse')
 
@@ -533,14 +535,14 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=1, help='size of minibatch used')
     parser.add_argument('--conv_type', type=str, choices=['patience', 'grad'], default='patience', help='how to determine convergence. adam only')
     parser.add_argument('--patience', type=int, default=1000, help='stop training if loss doesn\'t decrease. adam only')
-    parser.add_argument('--grad_threshold', type=float, default=1e-4, help='stop training if grad is less than certain amount. adam only')
+    # parser.add_argument('--grad_threshold', type=float, default=1e-4, help='stop training if grad is less than certain amount. adam only')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate. adam only')
     parser.add_argument('--n_epochs', type=int, default=10, help='number of epochs to train for. adam only')
 
     parser.add_argument('--seed', type=int, help='seed for most of network')
     parser.add_argument('--network_seed', type=int, help='seed for the network')
-    parser.add_argument('--reservoir_seed', type=int, help='seed for reservoir')
-    parser.add_argument('--reservoir_x_seed', type=int, default=0, help='seed for reservoir init hidden states. -1 for zero init')
+    # parser.add_argument('--reservoir_seed', type=int, help='seed for reservoir')
+    parser.add_argument('--res_x_seed', type=int, default=0, help='seed for reservoir init hidden states. -1 for zero init')
 
     parser.add_argument('-x', '--reservoir_x_init', type=str, default=None, help='other seed options for reservoir')
 
@@ -553,9 +555,6 @@ def parse_args():
     parser.add_argument('--slurm_id', type=int, default=None)
 
     args = parser.parse_args()
-    args.res_init_params = {}
-    if args.res_init_type == 'gaussian':
-        args.res_init_params['std'] = args.res_init_gaussian_std
     args.bias = not args.no_bias
     args.use_reservoir = not args.no_reservoir
     return args
@@ -570,11 +569,10 @@ def adjust_args(args):
 
     # in case we are loading from a model
     # if we don't use this we might end up with an error when loading model
-    if args.model_path is not None and args.model_config_path is not None:
-        with open(args.model_config_path) as f:
-            config = json.load(f)
+    if args.model_path is not None:
+        config = get_config(args.model_path)
         args = fill_undefined_args(args, config, overwrite_none=True)
-        enforce_same = ['N', 'D', 'L', 'Z', 'T', 'bias']
+        enforce_same = ['N', 'D', 'L', 'Z', 'T', 'net', 'bias', 'use_reservoir']
         for v in enforce_same:
             if v in config and args.__dict__[v] != config[v]:
                 print(f'Warning: based on config, changed {v} from {args.__dict__[v]} -> {config[v]}')
@@ -584,18 +582,13 @@ def adjust_args(args):
     if args.train_parts == ['all']:
         args.train_parts = ['']
 
-    # output activation depends on the task / dataset used
-    if args.out_act is None:
-        if 'rsg' in args.dataset:
-            args.out_act = 'exp'
-        else:
-            args.out_act = 'none'
+    # # output activation depends on the task / dataset used
+    # if args.out_act is None:
+    #         args.out_act = 'none'
 
     # set the dataset
     if 'goals' in args.dataset:
         args.dset_type = 'goals'
-    elif 'rsg' in args.dataset:
-        args.dset_type = 'rsg'
     elif 'copy' in args.dataset:
         args.dset_type = 'copy'
     else:
@@ -637,10 +630,6 @@ def adjust_args(args):
     # logging, when loading models from paths
     if args.model_path is not None:
         logging.info(f'Using model path {args.model_path}')
-        if args.model_config_path is not None:
-            logging.info(f'...with config file {args.model_config_path}')
-        else:
-            logging.info('...but not using any config file. Errors may ensue due to net param mismatches')
 
     return args
 
