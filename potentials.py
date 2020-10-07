@@ -19,10 +19,10 @@ def sin_xy(x, npy=False):
 
 def sin_sphere(x, npy=False):
     if npy:
-        z = np.sin(x[0] ** 2 + x[1] ** 2)
+        z = np.sin(np.sqrt(x[0] ** 2 + x[1] ** 2))
         z = np.clip(z, a_min=0, a_max=None)
     else:
-        z = torch.sin(x[0] ** 2 + x[1] ** 2)
+        z = torch.sin(torch.sqrt(x[0] ** 2 + x[1] ** 2))
         z = torch.clamp(z, min=0)
     return z
 

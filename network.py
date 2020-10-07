@@ -181,6 +181,8 @@ class BasicNetwork(nn.Module):
             self.delay_ind = (self.delay_ind + 1) % self.network_delay
             z = z_delayed
 
+        # z = torch.clamp(z, -2, 2)
+
         if not extras:
             return z
         elif self.args.use_reservoir:

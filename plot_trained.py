@@ -22,16 +22,17 @@ parser = argparse.ArgumentParser()
 parser.add_argument('model', help='path to a model file, to be loaded into pytorch')
 parser.add_argument('-d', '--dataset', help='path to a dataset of trials')
 parser.add_argument('--goals_potential', help='potential fn to use')
-parser.add_argument('--noise', default=0, help='noise to add to trained weights')
 parser.add_argument('--res_noise', default=None, type=float)
 parser.add_argument('--out_act', default=None, type=str)
-parser.add_argument('--stride', default=1, type=int)
+parser.add_argument('--stride', default=None, type=int)
 parser.add_argument('-x', '--reservoir_x_init', default=None, type=str)
+parser.add_argument('-t', '--goals_timesteps', type=int, help='number of steps to run seq-goals datasets for')
+parser.add_argument('--goals_threshold', type=float, help='goals_threshold')
+
 parser.add_argument('-a', '--test_all', action='store_true')
 parser.add_argument('-n', '--no_plot', action='store_true')
-parser.add_argument('-t', '--goals_timesteps', type=int, help='number of steps to run seq-goals datasets for')
-parser.add_argument('--seq_goals_threshold', default=1, type=float, help='seq-goals-threshold')
 parser.add_argument('--dists', action='store_true', help='to plot dists for seq-goals')
+parser.add_argument('--noise', default=0, help='noise to add to trained weights')
 args = parser.parse_args()
 
 with open(args.model, 'rb') as f:
@@ -98,7 +99,7 @@ if not args.no_plot:
 
                 colors = iter(cm.Oranges(np.linspace(.2, 1, n_pts)))
                 for j in range(n_pts):
-                    ax.scatter(y[j][0], y[j][1], color=next(colors))
+                    ax.scatter(y[j][0], y[j][1], color=next(colors), s=144)
                     ax.annotate(j+1, (y[j][0], y[j][1]), ha='center', va='center')
 
                 # plot potential
@@ -123,7 +124,7 @@ if not args.no_plot:
                 for j in range(n_timesteps):
                     ax.scatter(z[j][0], z[j][1], color=next(ts_colors), s=5)
                 z_unzip = list(zip(*z))
-                ax.plot(z_unzip[0], z_unzip[1], color='salmon', lw=.5)
+                ax.plot(z_unzip[0], z_unzip[1], color='skyblue', lw=.5)
 
             ax.tick_params(axis='both', color='white')
             ax.set_title(f'trial {ix}, avg loss {np.round(float(loss), 2)}', size='small')
