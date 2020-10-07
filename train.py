@@ -498,6 +498,8 @@ def parse_args():
     parser.add_argument('-N', type=int, default=50, help='number of neurons in reservoir')
     parser.add_argument('-Z', type=int, default=2, help='output dimension')
 
+    parser.add_argument('-H', type=int, default=3, help='hypothesizer hidden dimension')
+
     parser.add_argument('--net', type=str, default='basic', choices=['basic', 'state', 'hypothesis'])
 
     parser.add_argument('--train_parts', type=str, nargs='+', default=[''])

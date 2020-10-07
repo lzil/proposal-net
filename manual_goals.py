@@ -14,4 +14,6 @@ def across_goals(n_goals, dim, scale):
         goals.append(mains[i])
         goals.append(-mains[i])
 
+    goals = goals[:n_goals]
+
     return goals

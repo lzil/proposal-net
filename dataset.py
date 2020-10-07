@@ -155,14 +155,15 @@ def create_dataset(args):
             for n in range(n_trials):
                 if 'across' in trial_args:
                     trials.append(across_goals(n_goals, dim, scale))
+        else:
 
-        for n in range(n_trials):
-            trial = []
-            
-            for i in range(n_goals):
-                trial.append(np.random.normal(loc=0, scale=scale, size=dim))
+            for n in range(n_trials):
+                trial = []
+                
+                for i in range(n_goals):
+                    trial.append(np.random.normal(loc=0, scale=scale, size=dim))
 
-            trials.append(trial)
+                trials.append(trial)
 
     return trials, config
 

@@ -20,7 +20,8 @@ from helpers import get_potential
 
 parser = argparse.ArgumentParser()
 parser.add_argument('model', help='path to a model file, to be loaded into pytorch')
-parser.add_argument('--dataset', help='path to a dataset of trials')
+parser.add_argument('-d', '--dataset', help='path to a dataset of trials')
+parser.add_argument('--goals_potential', help='potential fn to use')
 parser.add_argument('--noise', default=0, help='noise to add to trained weights')
 parser.add_argument('--res_noise', default=None, type=float)
 parser.add_argument('--out_act', default=None, type=str)
@@ -105,7 +106,11 @@ if not args.no_plot:
                     p_lim = 15
                     zx = np.outer(np.linspace(-p_lim, p_lim, 30), np.ones(30)) 
                     zy = zx.copy().T # transpose 
-                    zz = p_fn([zx, zy], npy=True)
+                    zz = np.zeros_like(zx)
+                    for dim1 in range(30):
+                        for dim2 in range(30):
+                            zz[dim1, dim2] = p_fn((zx[dim1, dim2], zy[dim1, dim2]), npy=True)
+                    #zz = p_fn([zx, zy], npy=True)
                     ax.imshow(zz, cmap='hot', interpolation='nearest', extent=(-p_lim,p_lim,-p_lim,p_lim), alpha=.3)
 
                     ax.set_xlim([-p_lim,p_lim])

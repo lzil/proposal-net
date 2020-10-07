@@ -19,6 +19,7 @@ DEFAULT_ARGS = {
     'D': 5,
     'N': 50,
     'Z': 2,
+    'H': 3,
     'use_reservoir': True,
     'res_init_type': 'gaussian',
     'res_init_params': {'std': 1.5},
@@ -232,19 +233,20 @@ class Hypothesizer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.sample_std = .1
+        self.sample_std = .5
 
-        # simple one layer linear network for now, can generalize later
         # L dimensions for state, 2 dimensions for task (desired state)
-        self.W_sample = nn.Linear(self.args.L + self.args.T, self.args.D)
+        self.W_1 = nn.Linear(self.args.L + self.args.T, self.args.H)
+        self.W_2 = nn.Linear(self.args.H, self.args.D)
 
     def forward(self, s, t):
         s, t = adj_batch_dims(s, t)
         inp = torch.cat([s, t], dim=-1)
         if self.sample_std > 0:
             inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
-        pred = self.W_sample(inp)
-        return pred
+        h = torch.tanh(self.W_1(inp))
+        prop = self.W_2(h)
+        return prop
 
 # has hypothesizer
 # doesn't have the simulator because the truth is just given to the network

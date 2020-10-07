@@ -36,9 +36,20 @@ def gentle_slope(x, npy=False):
 
 def central_bump(x, npy=False):
     if npy:
-        xx = np.array(x).transpose(1,2,0)
-        z = mvn(np.zeros(len(x))).pdf(xx)
+        # xx = np.moveaxis(x, 0, -1)
+        z = mvn(np.zeros(len(x))).pdf(x)
     else:
-        dist = tmvn.MultivariateNormal(loc=torch.zeros_like(x), covariance_matrix=torch.eye(x.shape[0]))
+        # pdb.set_trace()
+        dist = tmvn.MultivariateNormal(loc=torch.zeros(len(x)), covariance_matrix=torch.eye(x.shape[0]))
         z = torch.exp(dist.log_prob(x))
-    return 50 * z
+    return 100 * z
+
+
+
+if __name__ == '__main__':
+    x = np.array((0, 0))
+
+    x = torch.from_numpy(x)
+
+    # pdb.set_trace()
+    print(central_bump(x))
