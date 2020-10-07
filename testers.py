@@ -13,8 +13,6 @@ from utils import Bunch, load_rb
 
 from helpers import get_potential, goals_loss, update_goal_indices, get_x_y
 
-
-
 # extracts the correct parameters N, D, O, etc. in order to properly create a net to load into
 def load_model_path(path, config):
     if type(config) is dict:

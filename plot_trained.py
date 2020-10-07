@@ -52,24 +52,7 @@ if args.noise != 0:
 
 config = fill_undefined_args(args, config, overwrite_none=True)
 
-# net_params = {
-#     'dset': args.dataset,
-#     'out_act': args.out_act,
-#     'stride': args.stride,
-#     'res_noise': args.res_noise
-# }
 net = load_model_path(args.model, config=config)
-
-
-# dset = load_rb(args.dataset)
-
-# params={
-#     'dset': args.dataset,
-#     'reservoir_x_init': args.reservoir_x_init,
-#     'seq_goals_timesteps': args.seq_goals_timesteps,
-#     'seq_goals_threshold': args.seq_goals_threshold
-# }
-
 
 if args.test_all:
     _, loss2 = test_model(net, config)
@@ -119,7 +102,7 @@ if not args.no_plot:
 
                 # plot potential
                 if config.goals_potential != 'none':
-                    p_lim = 10
+                    p_lim = 15
                     zx = np.outer(np.linspace(-p_lim, p_lim, 30), np.ones(30)) 
                     zy = zx.copy().T # transpose 
                     zz = p_fn([zx, zy], npy=True)
@@ -129,7 +112,7 @@ if not args.no_plot:
                     ax.set_ylim([-p_lim,p_lim])
                 
                 # plot model output
-                z = z[::2]
+                # z = z[::2]
                 n_timesteps = z.shape[0]
                 ts_colors = iter(cm.Blues(np.linspace(0.3, 1, n_timesteps)))
                 for j in range(n_timesteps):
