@@ -155,21 +155,23 @@ class BasicNetwork(nn.Module):
         # pdb.set_trace()
         # pass through the forward part
         u = self.W_f(o.reshape(-1, self.args.L))
+        if self.args.use_reservoir:
+            x = self.reservoir(u)
 
-        x = self.reservoir(u)
+            # self.stride_step += 1
+            # if self.stride_step % self.stride == 0:
+            #     x = self.reservoir(u)
+            #     self.stride_step = 0
+            # else:
+            #     x = self.reservoir(-1)
+            #     if x.shape[0] != u.shape[0]:
+            #         # to expand hidden layer to appropriate batch size
+            #         mul = u.shape[0]
+            #         x = x.repeat((mul, 1))
 
-        # self.stride_step += 1
-        # if self.stride_step % self.stride == 0:
-        #     x = self.reservoir(u)
-        #     self.stride_step = 0
-        # else:
-        #     x = self.reservoir(-1)
-        #     if x.shape[0] != u.shape[0]:
-        #         # to expand hidden layer to appropriate batch size
-        #         mul = u.shape[0]
-        #         x = x.repeat((mul, 1))
-
-        z = self.W_ro(x)
+            z = self.W_ro(x)
+        else:
+            z = self.W_ro(u)
         z = self.out_act(z)
 
         if self.network_delay > 0:
@@ -177,13 +179,18 @@ class BasicNetwork(nn.Module):
             self.delay_output[self.delay_ind] = z
             self.delay_ind = (self.delay_ind + 1) % self.network_delay
             z = z_delayed
+
         if not extras:
             return z
-        return z, {'x': x, 'u': u}
+        elif self.args.use_reservoir:
+            return z, {'x': x, 'u': u}
+        else:
+            return z, {'u': u}
 
 
     def reset(self, res_state=None):
-        self.reservoir.reset(res_state=res_state)
+        if self.args.use_reservoir:
+            self.reservoir.reset(res_state=res_state)
         # set up network delay mechanism. essentially a queue of length network_delay
         # with a pointer to the current index
         if self.network_delay > 0:
@@ -272,12 +279,14 @@ class StateNet(nn.Module):
                 x = self.reservoir(prop)
                 prop = prop * self.args.res_input_decay
 
-        z = self.W_ro(x)
+            z = self.W_ro(x)
+        else:
+            z = self.W_ro(prop)
         # clipping so movements can't be too large
         z = torch.clamp(z, -2, 2)
         self.s = self.s + z
         if extras:
-            return self.s, {'z': [z]}
+            return self.s, {'z': z}
         return self.s
 
     def reset(self, res_state=None):
@@ -296,12 +305,11 @@ class HypothesisNet(nn.Module):
         args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         self.args = args
 
+        if not hasattr(self.args, 'network_seed'):
+            self.args.network_seed = random.randrange(1e6)
+        self._init_vars()
         if self.args.model_path is not None:
             self.load_state_dict(torch.load(args.model_path))
-        else:
-            if not hasattr(args, 'network_seed'):
-                self.args.network_seed = random.randrange(1e6)
-            self._init_vars()
 
     def _init_vars(self):
         rng_pt = torch.get_rng_state()

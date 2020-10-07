@@ -19,7 +19,7 @@ import copy
 from network import BasicNetwork, StateNet, Reservoir, HypothesisNet
 
 from utils import log_this, load_rb, fill_undefined_args, get_config
-from helpers import get_optimizer, get_criterion, goals_loss, update_goal_indices, get_x_y
+from helpers import get_optimizer, get_criterion, get_potential, goals_loss, update_goal_indices, get_x_y
 
 class Trainer:
     def __init__(self, args):
@@ -57,23 +57,29 @@ class Trainer:
         # getting number of elements of every parameter
         self.n_params = {}
         self.train_params = []
+        self.not_train_params = []
         logging.info('Training the following parameters:')
         for k,v in self.net.named_parameters():
             # k is name, v is weight
-
+            found = False
             # filtering just for the parts that will be trained
             for part in self.args.train_parts:
                 if part in k:
                     logging.info(f'  {k}')
                     self.n_params[k] = (v.shape, v.numel())
                     self.train_params.append(v)
+                    found = True
                     break
+            if not found:
+                self.not_train_params.append(k)
+        logging.info('Not training:')
+        for k in self.not_train_params:
+            logging.info(f'  {k}')
 
         self.criterion = get_criterion(self.args)
-        
         self.optimizer = get_optimizer(self.args, self.train_params)
-
         self.dset = load_rb(self.args.dataset)
+        self.potential = get_potential(self.args)
 
         # if using separate training and test sets, separate them out
         if self.args.separate_test:
@@ -353,7 +359,7 @@ class Trainer:
         net_in = x_goal.reshape(-1, self.args.L)
         net_out, extras = self.net(net_in, extras=True)
         # the target is actually the input
-        step_loss, new_indices = goals_loss(net_out, x, indices, threshold=args.goals_threshold, update=True)
+        step_loss, new_indices = goals_loss(net_out, x, indices, self.potential, threshold=self.args.goals_threshold)
         # hacky way to append the net_in
         extras.update({'in': net_in})
 
@@ -523,6 +529,7 @@ def parse_args():
     # goals parameters
     parser.add_argument('--goals_timesteps', type=int, default=200, help='num timesteps to run seq goals dataset for')
     parser.add_argument('--goals_threshold', type=float, default=1, help='threshold for detection for seq goals')
+    parser.add_argument('--goals_potential', type=str, default='none')
 
     # optimization parameters
     parser.add_argument('--optimizer', choices=['adam', 'sgd', 'rmsprop', 'lbfgs-scipy', 'lbfgs-pytorch'], default='adam')

@@ -5,8 +5,9 @@ import torch.nn as nn
 import torch.optim as optim
 
 import pdb
-
 import random
+
+import potentials
 
 def get_optimizer(args, train_params):
     op = None
@@ -31,27 +32,41 @@ def get_criterion(args):
 
 def get_output_activation(args):
     if args.out_act == 'exp':
-        fn =  torch.exp
+        fn = torch.exp
     elif args.out_act == 'relu':
-        fn =  nn.ReLU()
+        fn = nn.ReLU()
     elif args.out_act == 'none':
-        fn =  lambda x: x
+        fn = lambda x: x
     return fn
 
+def get_potential(args):
+    if args.goals_potential == 'none':
+        p = potentials.none
+    elif args.goals_potential == 'sin_xy':
+        p = potentials.sin_xy
+    elif args.goals_potential == 'gentle_slope':
+        p = potentials.gentle_slope
+    return p
+
+
 # loss function for sequential goals
-def goals_loss(out, targets, indices, threshold=1, update=True):
+def goals_loss(out, targets, indices, p_fn, threshold=1, update=True):
     target = targets[torch.arange(targets.shape[0]),indices,:]
+    ps = []
     if len(out.shape) > 1:
         dists = torch.norm(out - target, dim=1)
+        for pt in out:
+            ps.append(p_fn(pt))
     else:
         # just one dimension so only one element in batch
         dists = torch.norm(out - target, dim=0, keepdim=True)
+        ps = [p_fn(out)]
 
     done = (dists < threshold) * 1
     # update the indices while we're at it
     if update:
         indices = update_goal_indices(targets, indices, done)
-    loss = torch.sum(dists) - indices.sum()
+    loss = torch.sum(dists) - indices.sum() + sum(ps)
     return loss, indices
 
 # updating indices array to get the next targets for sequential goals

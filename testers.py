@@ -11,7 +11,7 @@ import sys
 from network import BasicNetwork, StateNet
 from utils import Bunch, load_rb
 
-from helpers import goals_loss, update_goal_indices, get_x_y
+from helpers import get_potential, goals_loss, update_goal_indices, get_x_y
 
 
 
@@ -33,8 +33,9 @@ def load_model_path(path, config):
 # works with plot_trained.py
 def test_model(net, config, n_tests=0):
     dset = load_rb(config.dataset)
-    
+
     dset_idx = range(len(dset))
+    p_fn = get_potential(config)
     criterion = nn.MSELoss()
     if n_tests != 0:
         dset_idx = sorted(random.sample(range(len(dset)), n_tests))
@@ -68,7 +69,7 @@ def test_model(net, config, n_tests=0):
                     # need to add the dimension back in so the goals loss fn works
                     net_out_k = net_out[k].unsqueeze(0)
                     x_k = x[k].unsqueeze(0)
-                    step_loss, cur_idx[k] = goals_loss(net_out_k, x_k, cur_idx[k], threshold=config.goals_threshold)
+                    step_loss, cur_idx[k] = goals_loss(net_out_k, x_k, cur_idx[k], p_fn, threshold=config.goals_threshold)
                     trial_losses.append(step_loss)
                     # dones[k] = done.item()
                 # cur_idx = update_seq_indices(x, cur_idx, dones)
