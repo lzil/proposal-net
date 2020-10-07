@@ -44,6 +44,8 @@ def get_potential(args):
         p = potentials.none
     elif args.goals_potential == 'sin_xy':
         p = potentials.sin_xy
+    elif args.goals_potential == 'sin_sphere':
+        p = potentials.sin_sphere
     elif args.goals_potential == 'gentle_slope':
         p = potentials.gentle_slope
     elif args.goals_potential == 'central_bump':

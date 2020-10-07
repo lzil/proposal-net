@@ -19,19 +19,19 @@ def sin_xy(x, npy=False):
 
 def sin_sphere(x, npy=False):
     if npy:
-        z = np.sin(np.sqrt(x[0] ** 2 + x[1] ** 2))
+        z = .5 * np.sin(np.sqrt(x[0] ** 2 + x[1] ** 2))
         z = np.clip(z, a_min=0, a_max=None)
     else:
-        z = torch.sin(torch.sqrt(x[0] ** 2 + x[1] ** 2))
+        z = .5 * torch.sin(torch.sqrt(x[0] ** 2 + x[1] ** 2))
         z = torch.clamp(z, min=0)
     return z
 
 def gentle_slope(x, npy=False):
-    z = .01 * (x[0] ** 2 + x[1] ** 2)
-    if npy:
-        z = np.clip(z, a_min=0, a_max=None)
-    else:
-        z = torch.clamp(z, min=0)
+    z = .02 * (x[0] ** 2 + x[1] ** 2)
+    # if npy:
+    #     z = np.clip(z, a_min=0, a_max=None)
+    # else:
+    #     z = torch.clamp(z, min=0)
     return z
 
 def central_bump(x, npy=False):
