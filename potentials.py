@@ -41,4 +41,4 @@ def central_bump(x, npy=False):
     else:
         dist = tmvn.MultivariateNormal(loc=torch.zeros_like(x), covariance_matrix=torch.eye(x.shape[0]))
         z = torch.exp(dist.log_prob(x))
-    return 5 * z
+    return 50 * z

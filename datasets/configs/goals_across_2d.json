@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "dataset.py",
+    "create",
+    "goals_across_2d",
+    "-a",
+    "across"
+  ],
+  "t_type": "goals",
+  "n_trials": 1000,
+  "t_len": 200,
+  "n_goals": 10,
+  "scale": 5,
+  "dim": 2,
+  "goals-type": "across"
+}

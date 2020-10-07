@@ -16,6 +16,8 @@ import argparse
 from motifs import gen_fn_motifs
 from utils import load_rb
 
+from manual_goals import across_goals
+
 eps = 1e-6
 
 # toy ready set go dataset
@@ -146,9 +148,17 @@ def create_dataset(args):
         config['n_goals'] = n_goals
         config['scale'] = scale
         config['dim'] = dim
+        config['goals-type'] = 'normal'
+
+        if 'across' in trial_args:
+            config['goals-type'] = 'across'
+            for n in range(n_trials):
+                if 'across' in trial_args:
+                    trials.append(across_goals(n_goals, dim, scale))
 
         for n in range(n_trials):
             trial = []
+            
             for i in range(n_goals):
                 trial.append(np.random.normal(loc=0, scale=scale, size=dim))
 
