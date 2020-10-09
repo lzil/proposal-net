@@ -5,6 +5,6 @@ logs/
 **slurm**
 
 __pycache__/
-sshfs_ri/
+sshfs_pn/
 
 ._*

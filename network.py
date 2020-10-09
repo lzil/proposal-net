@@ -45,14 +45,19 @@ class Reservoir(nn.Module):
         if not hasattr(self.args, 'res_x_seed'):
             self.args.res_x_seed = np.random.randint(1e6)
 
-        # self.J = nn.Linear(args.N, args.N, bias=False)
         self.activation = torch.tanh
         self.tau_x = 10
 
         self.n_burn_in = self.args.res_burn_steps
         self.res_x_seed = self.args.res_x_seed
 
-        self.noise_std = args.res_noise
+        self.noise_std = self.args.res_noise
+
+        self.latency = self.args.res_latency
+        self.latent_idx = -1
+        self.latent_u = 1
+        self.latent_decay = self.args.latent_decay
+        self.latent_out = 0
 
         # check whether we want to load reservoir from somewhere else
         # if args.model_path is not None:
@@ -80,6 +85,17 @@ class Reservoir(nn.Module):
         self.x.detach_()
 
     def forward(self, u):
+        # update latent state
+        self.latent_u = self.latent_u * self.latent_decay + u * (1 - self.latent_decay)
+        if (self.latent_idx + 1) % self.latency != 0:
+            # if it's not time to act, then update latent idx, decay old output, and return it
+            self.latent_idx += 1
+            self.latent_out = self.latent_out * self.latent_decay
+            return self.latent_out
+        # otherwise it's time to do some work! finally use latent_u
+        u = self.latent_u
+        self.latent_idx = 0
+
         if type(u) is int and u == -1:
             # ensures that we don't add the bias term
             g = self.activation(self.J(self.x))
@@ -126,9 +142,6 @@ class BasicNetwork(nn.Module):
         super().__init__()
         args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         self.args = args
-        
-        # self.stride = args.stride
-        # self.stride_step = 0
        
         if not hasattr(self.args, 'network_seed'):
             self.args.network_seed = random.randrange(1e6)
@@ -158,18 +171,6 @@ class BasicNetwork(nn.Module):
         u = self.W_f(o.reshape(-1, self.args.L))
         if self.args.use_reservoir:
             x = self.reservoir(u)
-
-            # self.stride_step += 1
-            # if self.stride_step % self.stride == 0:
-            #     x = self.reservoir(u)
-            #     self.stride_step = 0
-            # else:
-            #     x = self.reservoir(-1)
-            #     if x.shape[0] != u.shape[0]:
-            #         # to expand hidden layer to appropriate batch size
-            #         mul = u.shape[0]
-            #         x = x.repeat((mul, 1))
-
             z = self.W_ro(x)
         else:
             z = self.W_ro(u)

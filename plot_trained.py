@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import matplotlib.cm as cm
+import matplotlib.colors as colors
 
 import random
 import pickle
@@ -97,9 +98,9 @@ if not args.no_plot:
                 # plot actual goal points
                 n_pts = y.shape[0]
 
-                colors = iter(cm.Oranges(np.linspace(.2, 1, n_pts)))
+                goal_colors = iter(cm.Oranges(np.linspace(.2, 1, n_pts)))
                 for j in range(n_pts):
-                    ax.scatter(y[j][0], y[j][1], color=next(colors), s=144)
+                    ax.scatter(y[j][0], y[j][1], color=next(goal_colors), s=144)
                     ax.annotate(j+1, (y[j][0], y[j][1]), ha='center', va='center')
 
                 # plot potential
@@ -112,7 +113,7 @@ if not args.no_plot:
                         for dim2 in range(30):
                             zz[dim1, dim2] = p_fn((zx[dim1, dim2], zy[dim1, dim2]), npy=True)
                     #zz = p_fn([zx, zy], npy=True)
-                    ax.imshow(zz, cmap='hot', interpolation='nearest', extent=(-p_lim,p_lim,-p_lim,p_lim), alpha=.3)
+                    ax.imshow(zz, cmap='plasma', norm=colors.Normalize(vmin=0,vmax=1), interpolation='nearest', extent=(-p_lim,p_lim,-p_lim,p_lim), alpha=1)
 
                     ax.set_xlim([-p_lim,p_lim])
                     ax.set_ylim([-p_lim,p_lim])
@@ -120,9 +121,9 @@ if not args.no_plot:
                 # plot model output
                 # z = z[::2]
                 n_timesteps = z.shape[0]
-                ts_colors = iter(cm.Blues(np.linspace(0.3, 1, n_timesteps)))
+                ts_colors = iter(cm.Blues(np.linspace(0.2, 1, n_timesteps)))
                 for j in range(n_timesteps):
-                    ax.scatter(z[j][0], z[j][1], color=next(ts_colors), s=5)
+                    ax.scatter(z[j][0], z[j][1], color=next(ts_colors), s=10)
                 z_unzip = list(zip(*z))
                 ax.plot(z_unzip[0], z_unzip[1], color='skyblue', lw=.5)
 
