@@ -395,9 +395,6 @@ class MemorySimulator(nn.Module):
         self.latent_decay = self.args.latent_decay
         self.latent_out = 0
 
-
-        
-
 # in case we're working with a batch of unknown size
 def adj_batch_dims(smaller, larger):
     if len(smaller.shape) + 1 == len(larger.shape):
@@ -412,49 +409,74 @@ class Hypothesizer(nn.Module):
         self.sample_std = .5
 
         # L dimensions for state, 2 dimensions for task (desired state)
-        self.W_1 = nn.Linear(self.args.L + self.args.T, self.args.H)
-        self.W_2 = nn.Linear(self.args.H, self.args.D)
+        # self.W_1 = nn.Linear(self.args.L + self.args.T, self.args.H)
+        # self.W_2 = nn.Linear(self.args.H, self.args.D)
 
-        # dealing with latent output
-        self.latency = self.args.h_latency
-        self.latent_idx = -1
-        self.latent_arr = [0] * self.latency
-        self.latent_decay = self.args.latent_decay
-        self.latent_out = 0
+        self.W_mu = nn.Linear(self.args.L + self.args.T, self.args.H)
+        self.W_var = nn.Linear(self.args.L + self.args.T, self.args.H)
+        self.W_H = nn.Linear(self.args.H, self.args.D)
+
+        self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=1)
+
+        # # dealing with latent output
+        # self.latency = self.args.h_latency
+        # self.latent_idx = -1
+        # self.latent_arr = [0] * self.latency
+        # self.latent_decay = self.args.latent_decay
+        # self.latent_comp = None
+        # # [prop, kl]
+        # self.latent_out = [0, 0]
+
+    # taken loosely from https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py
+    def _encode(self, inp):
+        mu = self.W_mu(inp)
+        logvar = self.W_var(inp)
+        return [mu, logvar]
+
+    def _reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def _decode(self, z):
+        return self.W_H(z)
 
     def forward(self, s, t):
         s, t = adj_batch_dims(s, t)
         inp = torch.cat([s, t], dim=-1)
 
-        # update latent state
-        self.latent_arr[self.latent_idx] = inp
-        if (self.latent_idx + 1) % self.latency != 0:
-            # if it's not time to act, then update latent idx, decay old output, and return it
-            self.latent_idx += 1
-            self.latent_out = self.latent_out * self.latent_decay
-            return self.latent_out
-        # otherwise it's time to do some work! finally use latent_u
-        self.latent_idx = 0
-        cur_decay = 1
-        for i in range(1, self.latency):
-            cur_decay *= self.latent_decay
-            self.latent_arr[i] *= cur_decay
-        # sum of geometric series of length self.latency
-        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
-        inp = sum(self.latent_arr) / geom_sum
+        do_update = self.latent.next_inp(inp)
 
-        if self.sample_std > 0:
-            inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
-        h = torch.tanh(self.W_1(inp))
-        prop = self.W_2(h)
+        # if self.sample_std > 0:
+        #     inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
+        # h = torch.tanh(self.W_1(inp))
+        # prop = self.W_2(h)
 
-        self.latent_out = prop
-        return prop
+        if do_update:
+
+            mu, log_var = self._encode(inp)
+            z = self._reparameterize(mu, log_var)
+            prop = self._decode(z)
+
+            kl = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+            self.latent.next_out(prop, kl)
+
+        return self.latent.latent_out
+
+        # replacing current out with computation done in the past
+        # if self.latent_comp is None:
+        #     self.latent_comp = [torch.zeros_like(prop), 0]
+        # self.latent_out = self.latent_comp
+        # self.latent_comp = [prop, kl]
+        # return self.latent_out
 
     def reset(self):
-        self.latent_idx = -1
-        self.latent_arr = [0] * self.latency
-        self.latent_out = 0
+        self.latent.reset()
+        # self.latent_idx = -1
+        # self.latent_arr = [0] * self.latency
+        # self.latent_out = [0,0]
+        # self.latent_comp = None
 
 # has hypothesizer
 # doesn't have the simulator because the truth is just given to the network
@@ -482,7 +504,7 @@ class StateNet(nn.Module):
 
 
     def forward(self, t, extras=False):
-        prop = self.hypothesizer(self.s, t)
+        prop, kl = self.hypothesizer(self.s, t)
         if self.args.use_reservoir:
             x = self.reservoir(prop)
             z = self.W_ro(x)
@@ -492,7 +514,7 @@ class StateNet(nn.Module):
         z = torch.clamp(z, -2, 2)
         self.s = self.s + z
         if extras:
-            return self.s, {'z': z}
+            return self.s, {'z': z, 'kl': kl}
         return self.s
 
     def reset(self, res_state=None):
@@ -533,7 +555,7 @@ class HypothesisNet(nn.Module):
     def forward(self, t, extras=False):
         fail_count = 0
         while True:
-            prop = self.hypothesizer(self.s, t)
+            prop, kld = self.hypothesizer(self.s, t)
             sim = self.simulator(self.s, prop)
 
             # test the sim here
@@ -586,3 +608,49 @@ class HypothesisNet(nn.Module):
     def reset(self, res_state=None):
         self.reservoir.reset(res_state=res_state)
         self.s = torch.zeros(self.args.Z)
+
+
+# so I don't have to keep writing the code for latent dynamics (e.g. it takes some time for network to operate and give result)
+class Latent:
+    def __init__(self, latency, decay, nargs=0):
+        self.nargs = nargs
+        self.latency = latency
+        self.latent_idx = -1
+        self.latent_arr = [0] * self.latency
+        self.latent_decay = decay
+        self.latent_out = []
+        self.latent_comp = None
+
+    def next_inp(self, inp):
+        # update latent state
+        self.latent_arr[self.latent_idx] = inp
+        if (self.latent_idx + 1) % self.latency != 0:
+            # if it's not time to act, then update latent idx, decay old output, and return it
+            self.latent_idx += 1
+            self.latent_out[0] = self.latent_out[0] * self.latent_decay
+            return False
+        # otherwise it's time to do some work! finally use latent_u
+        self.latent_idx = 0
+        cur_decay = 1
+        for i in range(1, self.latency):
+            cur_decay *= self.latent_decay
+            self.latent_arr[i] *= cur_decay
+        # sum of geometric series of length self.latency
+        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
+        self.inp = sum(self.latent_arr) / geom_sum
+
+        return True
+
+    def next_out(self, out, *args):
+        # replacing current out with computation done in the past
+        if self.latent_comp is None:
+            self.latent_comp = [torch.zeros_like(out)] + [0] * self.nargs
+        self.latent_out = self.latent_comp
+        self.latent_comp = [out] + list(args)
+
+    def reset(self):
+        self.latent_idx = -1
+        self.latent_arr = [0] * self.latency
+        self.latent_out = [0,0]
+        self.latent_comp = None
+
