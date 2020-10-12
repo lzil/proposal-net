@@ -392,8 +392,11 @@ class VariationalHypothesizer(nn.Module):
         self.args = args
         self.sample_std = .5
 
-        self.W_mu = nn.Linear(self.args.L + self.args.T, self.args.H)
-        self.W_var = nn.Linear(self.args.L + self.args.T, self.args.H)
+        self.encoder = nn.Sequential(
+            nn.Linear(self.args.L + self.args.T, self.args.H),
+            nn.Tanh(),
+            nn.Linear(self.args.H, self.args.H * 2)
+        )
         self.W_H = nn.Linear(self.args.H, self.args.D)
 
         self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=1)
@@ -407,8 +410,9 @@ class VariationalHypothesizer(nn.Module):
         # taken loosely from https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py
         if do_update:
             # encoding
-            mu = self.W_mu(inp)
-            lvar = self.W_var(inp)
+            h = self.encoder(inp)
+            mu = h[:,:self.args.H]
+            lvar = h[:,self.args.H:]
             # reparameterization
             std = torch.exp(0.5 * lvar)
             eps = torch.randn_like(std)
@@ -449,10 +453,11 @@ class FFHypothesizer(nn.Module):
         # prop = self.W_2(h)
 
         if do_update:
-            prop = self.W_2(torch.tanh(self.W_1()))
+            prop = self.W_2(torch.tanh(self.W_1(inp)))
             self.latent.next_out(prop)
 
-        return self.latent.get_out()
+        # easy hack since kl is 0 if we don't use variational
+        return self.latent.get_out(), 0
 
     def reset(self):
         self.latent.reset()
@@ -475,6 +480,8 @@ class StateNet(nn.Module):
 
     def _init_vars(self):
         self.hypothesizer = VariationalHypothesizer(self.args)
+        #self.hypothesizer = FFHypothesizer(self.args)
+
         if self.args.use_reservoir:
             self.reservoir = Reservoir(self.args)
             self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
