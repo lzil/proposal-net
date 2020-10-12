@@ -336,7 +336,8 @@ class Trainer:
         etc = {
             'ins': ins,
             'targets': targets,
-            'outs': outs
+            'outs': outs,
+            'prop': extras['prop']
         }
         if self.args.dset_type == 'goals':
             etc['indices'] = cur_idx

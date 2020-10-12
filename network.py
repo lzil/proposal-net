@@ -58,11 +58,7 @@ class Reservoir(nn.Module):
 
         self.noise_std = self.args.res_noise
 
-        self.latency = self.args.r_latency
-        self.latent_idx = 0
-        self.latent_arr = [None] * self.latency
-        self.latent_decay = self.args.latent_decay
-        self.latent_out = 0
+        self.latent = Latent(self.args.r_latency, self.args.latent_decay, nargs=0)
 
         # check whether we want to load reservoir from somewhere else
         # if args.model_path is not None:
@@ -90,40 +86,28 @@ class Reservoir(nn.Module):
         self.x.detach_()
 
     def forward(self, u):
-        self.latent_arr[self.latent_idx] = u
-        if (self.latent_idx + 1) % self.latency != 0:
-            # if it's not time to act, then update latent idx, decay old output, and return it
-            self.latent_idx += 1
-            self.latent_out = self.latent_out * self.latent_decay
-            return self.latent_out
-        # otherwise it's time to do some work! finally use latent_u
-        self.latent_idx = 0
-        cur_decay = 1
-        for i in range(1, self.latency):
-            cur_decay *= self.latent_decay
-            self.latent_arr[i] *= cur_decay
-        # sum of geometric series of length self.latency
-        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
-        u = sum(self.latent_arr) / geom_sum
+        do_update = self.latent.next_inp(u)
+        
+        if do_update:
 
-        # actually doing the recurrent computation
-        g = self.activation(self.J(self.x) + self.W_u(u))
-        # adding any inherent reservoir noise
-        if self.noise_std > 0:
-            gn = g + torch.normal(torch.zeros_like(g), self.noise_std)
-        else:
-            gn = g
-        # reservoir dynamics
-        delta_x = (-self.x + gn) / self.tau_x
-        self.x = self.x + delta_x
+            # actually doing the recurrent computation
+            g = self.activation(self.J(self.x) + self.W_u(u))
+            # adding any inherent reservoir noise
+            if self.noise_std > 0:
+                gn = g + torch.normal(torch.zeros_like(g), self.noise_std)
+            else:
+                gn = g
+            # reservoir dynamics
+            delta_x = (-self.x + gn) / self.tau_x
+            self.x = self.x + delta_x
 
-        self.latent_out = self.x
-        return self.x
+
+            self.latent.next_out(self.x)
+
+        return self.latent.get_out()
 
     def reset(self, res_state=None, burn_in=True):
-        self.latent_idx = -1
-        self.latent_arr = [None] * self.latency
-        self.latent_out = 0
+        self.latent.reset()
 
         if res_state is None:
             # load specified hidden state from seed
@@ -402,15 +386,11 @@ def adj_batch_dims(smaller, larger):
     return (smaller, larger)
 
 # given current state and task, samples a proposal
-class Hypothesizer(nn.Module):
+class VariationalHypothesizer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         self.sample_std = .5
-
-        # L dimensions for state, 2 dimensions for task (desired state)
-        # self.W_1 = nn.Linear(self.args.L + self.args.T, self.args.H)
-        # self.W_2 = nn.Linear(self.args.H, self.args.D)
 
         self.W_mu = nn.Linear(self.args.L + self.args.T, self.args.H)
         self.W_var = nn.Linear(self.args.L + self.args.T, self.args.H)
@@ -418,28 +398,44 @@ class Hypothesizer(nn.Module):
 
         self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=1)
 
-        # # dealing with latent output
-        # self.latency = self.args.h_latency
-        # self.latent_idx = -1
-        # self.latent_arr = [0] * self.latency
-        # self.latent_decay = self.args.latent_decay
-        # self.latent_comp = None
-        # # [prop, kl]
-        # self.latent_out = [0, 0]
+    def forward(self, s, t):
+        s, t = adj_batch_dims(s, t)
+        inp = torch.cat([s, t], dim=-1)
 
-    # taken loosely from https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py
-    def _encode(self, inp):
-        mu = self.W_mu(inp)
-        logvar = self.W_var(inp)
-        return [mu, logvar]
+        do_update = self.latent.next_inp(inp)
 
-    def _reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return eps * std + mu
+        # taken loosely from https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py
+        if do_update:
+            # encoding
+            mu = self.W_mu(inp)
+            lvar = self.W_var(inp)
+            # reparameterization
+            std = torch.exp(0.5 * lvar)
+            eps = torch.randn_like(std)
+            z = eps * std + mu
+            # decoding
+            prop = self.W_H(z)
+            # calc KL for loss
+            kl = torch.sum(-0.5 * torch.sum(1 + lvar - mu ** 2 - lvar.exp(), dim=1), dim=0)
 
-    def _decode(self, z):
-        return self.W_H(z)
+            self.latent.next_out(prop, kl)
+
+        return self.latent.get_out()
+
+    def reset(self):
+        self.latent.reset()
+
+class FFHypothesizer(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.sample_std = .5
+
+        # L dimensions for state, 2 dimensions for task (desired state)
+        self.W_1 = nn.Linear(self.args.L + self.args.T, self.args.H)
+        self.W_2 = nn.Linear(self.args.H, self.args.D)
+
+        self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=0)
 
     def forward(self, s, t):
         s, t = adj_batch_dims(s, t)
@@ -453,30 +449,13 @@ class Hypothesizer(nn.Module):
         # prop = self.W_2(h)
 
         if do_update:
+            prop = self.W_2(torch.tanh(self.W_1()))
+            self.latent.next_out(prop)
 
-            mu, log_var = self._encode(inp)
-            z = self._reparameterize(mu, log_var)
-            prop = self._decode(z)
-
-            kl = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
-
-            self.latent.next_out(prop, kl)
-
-        return self.latent.latent_out
-
-        # replacing current out with computation done in the past
-        # if self.latent_comp is None:
-        #     self.latent_comp = [torch.zeros_like(prop), 0]
-        # self.latent_out = self.latent_comp
-        # self.latent_comp = [prop, kl]
-        # return self.latent_out
+        return self.latent.get_out()
 
     def reset(self):
         self.latent.reset()
-        # self.latent_idx = -1
-        # self.latent_arr = [0] * self.latency
-        # self.latent_out = [0,0]
-        # self.latent_comp = None
 
 # has hypothesizer
 # doesn't have the simulator because the truth is just given to the network
@@ -495,7 +474,7 @@ class StateNet(nn.Module):
         self.reset()
 
     def _init_vars(self):
-        self.hypothesizer = Hypothesizer(self.args)
+        self.hypothesizer = VariationalHypothesizer(self.args)
         if self.args.use_reservoir:
             self.reservoir = Reservoir(self.args)
             self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
@@ -514,7 +493,7 @@ class StateNet(nn.Module):
         z = torch.clamp(z, -2, 2)
         self.s = self.s + z
         if extras:
-            return self.s, {'z': z, 'kl': kl}
+            return self.s, {'z': z, 'kl': kl, 'prop': prop}
         return self.s
 
     def reset(self, res_state=None):
@@ -647,6 +626,12 @@ class Latent:
             self.latent_comp = [torch.zeros_like(out)] + [0] * self.nargs
         self.latent_out = self.latent_comp
         self.latent_comp = [out] + list(args)
+
+    def get_out(self):
+        if self.nargs == 0:
+            return self.latent_out[0]
+        else:
+            return self.latent_out
 
     def reset(self):
         self.latent_idx = -1
