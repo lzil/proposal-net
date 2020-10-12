@@ -29,7 +29,12 @@ DEFAULT_ARGS = {
     'network_delay': 0,
     'out_act': 'none',
     'stride': 1,
-    'model_path': None
+    'model_path': None,
+
+    'latent_decay': .9,
+    'r_latency': 1,
+    's_latency': 10,
+    'h_latency': 10
 }
 
 # SIMULATOR_ARGS.reservoir_seed = 0
@@ -49,13 +54,13 @@ class Reservoir(nn.Module):
         self.tau_x = 10
 
         self.n_burn_in = self.args.res_burn_steps
-        self.res_x_seed = self.args.res_x_seed
+        self.x_seed = self.args.res_x_seed
 
         self.noise_std = self.args.res_noise
 
-        self.latency = self.args.res_latency
-        self.latent_idx = -1
-        self.latent_u = 1
+        self.latency = self.args.r_latency
+        self.latent_idx = 0
+        self.latent_arr = [None] * self.latency
         self.latent_decay = self.args.latent_decay
         self.latent_out = 0
 
@@ -85,22 +90,24 @@ class Reservoir(nn.Module):
         self.x.detach_()
 
     def forward(self, u):
-        # update latent state
-        self.latent_u = self.latent_u * self.latent_decay + u * (1 - self.latent_decay)
+        self.latent_arr[self.latent_idx] = u
         if (self.latent_idx + 1) % self.latency != 0:
             # if it's not time to act, then update latent idx, decay old output, and return it
             self.latent_idx += 1
             self.latent_out = self.latent_out * self.latent_decay
             return self.latent_out
         # otherwise it's time to do some work! finally use latent_u
-        u = self.latent_u
         self.latent_idx = 0
+        cur_decay = 1
+        for i in range(1, self.latency):
+            cur_decay *= self.latent_decay
+            self.latent_arr[i] *= cur_decay
+        # sum of geometric series of length self.latency
+        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
+        u = sum(self.latent_arr) / geom_sum
 
-        if type(u) is int and u == -1:
-            # ensures that we don't add the bias term
-            g = self.activation(self.J(self.x))
-        else:
-            g = self.activation(self.J(self.x) + self.W_u(u))
+        # actually doing the recurrent computation
+        g = self.activation(self.J(self.x) + self.W_u(u))
         # adding any inherent reservoir noise
         if self.noise_std > 0:
             gn = g + torch.normal(torch.zeros_like(g), self.noise_std)
@@ -109,12 +116,18 @@ class Reservoir(nn.Module):
         # reservoir dynamics
         delta_x = (-self.x + gn) / self.tau_x
         self.x = self.x + delta_x
+
+        self.latent_out = self.x
         return self.x
 
     def reset(self, res_state=None, burn_in=True):
+        self.latent_idx = -1
+        self.latent_arr = [None] * self.latency
+        self.latent_out = 0
+
         if res_state is None:
             # load specified hidden state from seed
-            res_state = self.res_x_seed
+            res_state = self.x_seed
 
         if res_state == 'zero' or res_state == -1:
             # reset to 0
@@ -209,11 +222,22 @@ class Simulator(nn.Module):
         super().__init__()
         self.args = args
 
+        self.activation = torch.tanh
+        self.tau_x = 10
+
+        # weights in the recurrent net
         self.W_sim = nn.Sequential(
-            nn.Linear(self.args.L + self.args.D, 16),
-            nn.ReLU(),
-            nn.Linear(16, self.args.T)
+            nn.Linear(self.args.L + self.args.D, 16, bias=self.args.bias),
+            nn.Tanh(),
+            nn.Linear(16, self.args.L, bias=self.args.bias)
         )
+
+        # dealing with latent output
+        self.latency = self.args.sim_latency
+        self.latent_idx = 0
+        self.latent_arr = [None] * self.latency
+        self.latent_decay = self.args.latent_decay
+        self.latent_out = 0
 
     def forward(self, s, p):
         # in case we're working with a batch of unknown size
@@ -221,9 +245,158 @@ class Simulator(nn.Module):
         #     s = s.unsqueeze(0)
         s, p = adj_batch_dims(s, p)
         inp = torch.cat([s, p], dim=-1)
+
+        # update latent state
+        self.latent_arr[self.latent_idx] = inp
+        if (self.latent_idx + 1) % self.latency != 0:
+            # if it's not time to act, then update latent idx, decay old output, and return it
+            self.latent_idx += 1
+            self.latent_out = self.latent_out * self.latent_decay
+            return self.latent_out
+        # otherwise it's time to do some work! finally use latent_u
+        self.latent_idx = 0
+        cur_decay = 1
+        for i in range(1, self.latency):
+            cur_decay *= self.latent_decay
+            self.latent_arr[i] *= cur_decay
+        # sum of geometric series of length self.latency
+        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
+        inp = sum(self.latent_arr) / geom_sum
+
+        pred = self.W_sim(inp)
+        self.latent_out = pred
+
+        return pred
+
+class RecurrentSimulator(nn.Module):
+    def __init__(self, args=DEFAULT_ARGS):
+        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
+        super().__init__()
+        self.args = args
+
+        if not hasattr(self.args, 'sim_x_seed'):
+            self.args.sim_x_seed = np.random.randint(1e6)
+
+        self.x_seed = self.args.sim_x_seed
+        self.activation = torch.tanh
+        self.tau_x = 10
+
+        # weights in the recurrent net
+        self.J = nn.Linear(self.args.N_sim, self.args.N_sim, bias=False)
+        self.S_u = nn.Linear(self.args.L + self.args.D, self.args.N_sim, bias=False)
+        self.S_ro = nn.Linear(self.args.N_sim, self.args.L)
+
+        # dealing with latent output
+        self.latency = self.args.sim_latency
+        self.latent_idx = -1
+        self.latent_arr = [None] * self.latency
+        self.latent_decay = self.args.latent_decay
+        self.latent_out = 0
+
+    def forward(self, s, p):
+        # in case we're working with a batch of unknown size
+        # if len(s.shape) + 1 == len(p.shape):
+        #     s = s.unsqueeze(0)
+        s, p = adj_batch_dims(s, p)
+        inp = torch.cat([s, p], dim=-1)
+
+        # update latent state
+        self.latent_arr[self.latent_idx] = inp
+        if (self.latent_idx + 1) % self.latency != 0:
+            # if it's not time to act, then update latent idx, decay old output, and return it
+            self.latent_idx += 1
+            self.latent_out = self.latent_out * self.latent_decay
+            return self.latent_out
+        # otherwise it's time to do some work! finally use latent_u
+        self.latent_idx = 0
+        cur_decay = 1
+        for i in range(1, self.latency):
+            cur_decay *= self.latent_decay
+            self.latent_arr[i] *= cur_decay
+        # sum of geometric series of length self.latency
+        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
+        inp = sum(self.latent_arr) / geom_sum
+        
+
+        g = self.activation(self.J(self.x) + self.S_u(inp))
+        # adding any inherent reservoir noise
+        # if self.noise_std > 0:
+        #     gn = g + torch.normal(torch.zeros_like(g), self.noise_std)
+        # else:
+        #     gn = g
+        # reservoir dynamics
+        delta_x = (-self.x + gn) / self.tau_x
+        self.x = self.x + delta_x
+
+        self.latent_out = self.x
+
         pred = self.W_sim(inp)
 
         return pred
+
+    def burn_in(self, steps):
+        for i in range(steps):
+            g = self.activation(self.J(self.x))
+            delta_x = (-self.x + g) / self.tau_x
+            self.x = self.x + delta_x
+        self.x.detach_()
+
+    def reset(self, res_state=None, burn_in=True):
+        self.latent_idx = -1
+        self.latent_arr = [None] * self.latency
+        self.latent_out = 0
+
+        if res_state is None:
+            # load specified hidden state from seed
+            res_state = self.x_seed
+
+        if res_state == 'zero' or res_state == -1:
+            # reset to 0
+            self.x = torch.zeros((1, self.args.N))
+        elif res_state == 'random' or res_state == -2:
+            # reset to totally random value without using reservoir seed
+            self.x = torch.normal(0, 1, (1, self.args.N))
+        elif type(res_state) is int and res_state >= 0:
+            # if any seed set, set the net to that seed and burn in
+            rng_pt = torch.get_rng_state()
+            torch.manual_seed(res_state)
+            self.x = torch.normal(0, 1, (1, self.args.N))
+            torch.set_rng_state(rng_pt)
+        else:
+            # load an actual particular hidden state
+            # if there's an error here then highly possible that res_state has wrong form
+            self.x = torch.from_numpy(res_state).float()
+
+        if burn_in:
+            self.burn_in(self.n_burn_in)
+
+class MemorySimulator(nn.Module):
+    def __init__(self, args=DEFAULT_ARGS):
+        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
+        super().__init__()
+        self.args = args
+
+        if not hasattr(self.args, 'sim_x_seed'):
+            self.args.sim_x_seed = np.random.randint(1e6)
+
+        self.x_seed = self.args.sim_x_seed
+        self.activation = torch.tanh
+        self.tau_x = 10
+
+        # weights in the recurrent net
+        self.J = nn.Linear(self.args.N_sim, self.args.N_sim, bias=False)
+        self.S_u = nn.Linear(self.args.L + self.args.D, self.args.N_sim, bias=False)
+        self.S_ro = nn.Linear(self.args.N_sim, self.args.L)
+
+        # dealing with latent output
+        self.latency = self.args.sim_latency
+        self.latent_idx = -1
+        self.latent_arr = [None] * self.latency
+        self.latent_decay = self.args.latent_decay
+        self.latent_out = 0
+
+
+        
 
 # in case we're working with a batch of unknown size
 def adj_batch_dims(smaller, larger):
@@ -242,14 +415,46 @@ class Hypothesizer(nn.Module):
         self.W_1 = nn.Linear(self.args.L + self.args.T, self.args.H)
         self.W_2 = nn.Linear(self.args.H, self.args.D)
 
+        # dealing with latent output
+        self.latency = self.args.h_latency
+        self.latent_idx = -1
+        self.latent_arr = [0] * self.latency
+        self.latent_decay = self.args.latent_decay
+        self.latent_out = 0
+
     def forward(self, s, t):
         s, t = adj_batch_dims(s, t)
         inp = torch.cat([s, t], dim=-1)
+
+        # update latent state
+        self.latent_arr[self.latent_idx] = inp
+        if (self.latent_idx + 1) % self.latency != 0:
+            # if it's not time to act, then update latent idx, decay old output, and return it
+            self.latent_idx += 1
+            self.latent_out = self.latent_out * self.latent_decay
+            return self.latent_out
+        # otherwise it's time to do some work! finally use latent_u
+        self.latent_idx = 0
+        cur_decay = 1
+        for i in range(1, self.latency):
+            cur_decay *= self.latent_decay
+            self.latent_arr[i] *= cur_decay
+        # sum of geometric series of length self.latency
+        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
+        inp = sum(self.latent_arr) / geom_sum
+
         if self.sample_std > 0:
             inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
         h = torch.tanh(self.W_1(inp))
         prop = self.W_2(h)
+
+        self.latent_out = prop
         return prop
+
+    def reset(self):
+        self.latent_idx = -1
+        self.latent_arr = [0] * self.latency
+        self.latent_out = 0
 
 # has hypothesizer
 # doesn't have the simulator because the truth is just given to the network
@@ -278,12 +483,8 @@ class StateNet(nn.Module):
 
     def forward(self, t, extras=False):
         prop = self.hypothesizer(self.s, t)
-
         if self.args.use_reservoir:
-            for i in range(self.args.res_frequency):
-                x = self.reservoir(prop)
-                prop = prop * self.args.res_input_decay
-
+            x = self.reservoir(prop)
             z = self.W_ro(x)
         else:
             z = self.W_ro(prop)
@@ -297,6 +498,7 @@ class StateNet(nn.Module):
     def reset(self, res_state=None):
         if self.args.use_reservoir:
             self.reservoir.reset(res_state=res_state)
+        self.hypothesizer.reset()
         # initial condition
         self.s = torch.zeros(self.args.Z)
 
