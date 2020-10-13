@@ -516,7 +516,7 @@ def parse_args():
     parser.add_argument('--model_path', type=str, default=None, help='start training from certain model. superseded by below')
     # parser.add_argument('--Wro_path', type=str, default=None, help='start training from certain Wro')
     # parser.add_argument('--Wf_path', type=str, default=None, help='start training from certain Wf')
-    # parser.add_argument('--reservoir_path', type=str, default=None, help='saved reservoir. should be saved with seed tho')
+    parser.add_argument('--res_path', type=str, default=None, help='saved, probably trained, reservoir. should be saved with seed tho')
     # parser.add_argument('--simulator_path', type=str, default=None, help='saved simulator')
     
     parser.add_argument('--no_reservoir', action='store_true', help='leave out the reservoir completely')
@@ -529,7 +529,7 @@ def parse_args():
     parser.add_argument('--res_noise', type=float, default=0)
 
     # so backprop doesn't completely go crazy we might want to truncate BPTT
-    parser.add_argument('--latent_decay', type=float, default=.6, help='proportion to keep from the last state')
+    parser.add_argument('--latent_decay', type=float, default=.8, help='proportion to keep from the last state')
     parser.add_argument('--r_latency', type=int, default=1, help='how many operation steps it takes to move one step')
     # parser.add_argument('--r_input_decay', type=float, default=1, help='decay of res input for each step w/o input')
     parser.add_argument('--h_latency', type=int, default=1, help='how many operation steps it takes to move one step')
@@ -560,10 +560,11 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate. adam only')
     parser.add_argument('--n_epochs', type=int, default=10, help='number of epochs to train for. adam only')
 
+    # seeds
     parser.add_argument('--seed', type=int, help='seed for everything else')
     parser.add_argument('--network_seed', type=int, help='seed for the network')
-    # parser.add_argument('--reservoir_seed', type=int, help='seed for reservoir')
-    parser.add_argument('--res_x_seed', type=int, default=0, help='seed for reservoir init hidden states. -1 for zero init')
+    parser.add_argument('--res_seed', type=int, help='seed for reservoir')
+    parser.add_argument('--res_x_seed', type=int, default=0, help='seed for reservoir init hidden states')
 
     # parser.add_argument('-x', '--reservoir_x_init', type=str, default=None, help='other seed options for reservoir')
 
@@ -626,6 +627,8 @@ def adjust_args(args):
         args.seed = random.randrange(1e6)
     if args.network_seed is None:
         args.network_seed = random.randrange(1e6)
+    if args.res_seed is None:
+        args.res_seed = random.randrange(1e6)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
