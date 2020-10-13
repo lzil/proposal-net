@@ -463,6 +463,7 @@ class StateNet(nn.Module):
         if self.args.model_path is not None:
             self.load_state_dict(torch.load(args.model_path))
 
+        self.latent = Latent(self.args.h_latency, self.args.latent_decay)
         self.reset()
 
     def _init_vars(self):
@@ -479,13 +480,21 @@ class StateNet(nn.Module):
         else:
             self.W_ro = nn.Linear(self.args.D, self.args.Z, bias=self.args.bias)
 
-
     def forward(self, t, extras=False):
         if self.s is None:
             self._init_states(t)
         t = self._adj_input_dim(t)
-        prop, kl, conf = self.hypothesizer(self.s, t)
 
+        if self.cur_h is None:
+            prop, kl, conf = self.hypothesizer(self.s, t)
+            self.cur_h = [prop, kl, conf]
+
+        h_done = self.latent.step(0)
+        if h_done:
+            self.p = self.cur_h
+            self.cur_h = None
+
+        prop, kl, conf = self.p
         if self.args.use_reservoir:
             x = self.reservoir(prop)
             z = self.W_ro(x)
@@ -501,10 +510,11 @@ class StateNet(nn.Module):
     def reset(self, res_state=None):
         if self.args.use_reservoir:
             self.reservoir.reset(res_state=res_state)
-        self.hypothesizer.reset()
         # initial condition
+        self.latent.set_batch_size(1)
         self.s = None
         self.p = None
+        self.cur_h = None
 
     def _init_states(self, t):
         if len(t.shape) == 2:
@@ -622,7 +632,6 @@ class HypothesisNet(nn.Module):
 
                     self.c[i] = 'h'
 
-        print('the world turns')
         p = torch.cat([p[0] for p in self.p])
         kl = [p[1][0] for p in self.p]
 

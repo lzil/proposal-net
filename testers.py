@@ -8,7 +8,7 @@ import pdb
 import json
 import sys
 
-from network import BasicNetwork, StateNet
+from network import BasicNetwork, StateNet, HypothesisNet
 from utils import Bunch, load_rb
 
 from helpers import get_potential, goals_loss, update_goal_indices, get_x_y
@@ -23,6 +23,10 @@ def load_model_path(path, config):
         net = BasicNetwork(config)
     elif config.net == 'state':
         net = StateNet(config)
+    elif config.net == 'hypothesis':
+        net = HypothesisNet(config)
+    else:
+        raise NotImplementedError
 
     net.eval()
     return net

@@ -532,8 +532,8 @@ def parse_args():
     parser.add_argument('--latent_decay', type=float, default=.6, help='proportion to keep from the last state')
     parser.add_argument('--r_latency', type=int, default=1, help='how many operation steps it takes to move one step')
     # parser.add_argument('--r_input_decay', type=float, default=1, help='decay of res input for each step w/o input')
-    parser.add_argument('--h_latency', type=int, default=3, help='how many operation steps it takes to move one step')
-    parser.add_argument('--s_latency', type=int, default=3, help='how many operation steps it takes to move one step')
+    parser.add_argument('--h_latency', type=int, default=1, help='how many operation steps it takes to move one step')
+    parser.add_argument('--s_latency', type=int, default=1, help='how many operation steps it takes to move one step')
     
     parser.add_argument('--out_act', type=str, default='none', help='output activation')
 
