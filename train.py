@@ -361,7 +361,9 @@ class Trainer:
         net_out, extras = self.net(net_in, extras=True)
         # the target is actually the input
         step_loss, new_indices = goals_loss(net_out, x, indices, self.potential, threshold=self.args.goals_threshold)
-        step_loss += extras['kl']
+        # it'll be None if we just started, or if we're not doing variational stuff
+        if extras['kl'] is not None:
+            step_loss += sum(extras['kl'])
         # hacky way to append the net_in
         extras.update({'in': net_in})
 
@@ -503,6 +505,8 @@ def parse_args():
     parser.add_argument('-H', type=int, default=3, help='hypothesizer hidden dimension')
 
     parser.add_argument('--net', type=str, default='basic', choices=['basic', 'state', 'hypothesis'])
+    parser.add_argument('--h_type', type=str, default='variational', choices=['ff', 'variational'])
+    parser.add_argument('--s_type', type=str, default='ff', choices=['ff', 'recurrent'])
 
     parser.add_argument('--train_parts', type=str, nargs='+', default=[''])
     parser.add_argument('--stride', type=int, default=1, help='stride of the W_f')
@@ -551,7 +555,7 @@ def parse_args():
     # adam arguments
     parser.add_argument('--batch_size', type=int, default=1, help='size of minibatch used')
     parser.add_argument('--conv_type', type=str, choices=['patience', 'grad'], default='patience', help='how to determine convergence. adam only')
-    parser.add_argument('--patience', type=int, default=1000, help='stop training if loss doesn\'t decrease. adam only')
+    parser.add_argument('--patience', type=int, default=2000, help='stop training if loss doesn\'t decrease. adam only')
     # parser.add_argument('--grad_threshold', type=float, default=1e-4, help='stop training if grad is less than certain amount. adam only')
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate. adam only')
     parser.add_argument('--n_epochs', type=int, default=10, help='number of epochs to train for. adam only')

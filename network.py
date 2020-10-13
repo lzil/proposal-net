@@ -31,6 +31,9 @@ DEFAULT_ARGS = {
     'stride': 1,
     'model_path': None,
 
+    'h_type': 'variational',
+    's_type': 'ff',
+
     'latent_decay': .9,
     'r_latency': 1,
     's_latency': 10,
@@ -86,7 +89,7 @@ class Reservoir(nn.Module):
         self.x.detach_()
 
     def forward(self, u):
-        do_update = self.latent.next_inp(u)
+        do_update = self.latent.step_inp(u)
         
         if do_update:
 
@@ -102,7 +105,7 @@ class Reservoir(nn.Module):
             self.x = self.x + delta_x
 
 
-            self.latent.next_out(self.x)
+            self.latent.step_out(self.x)
 
         return self.latent.get_out()
 
@@ -217,40 +220,22 @@ class Simulator(nn.Module):
         )
 
         # dealing with latent output
-        self.latency = self.args.sim_latency
-        self.latent_idx = 0
-        self.latent_arr = [None] * self.latency
-        self.latent_decay = self.args.latent_decay
-        self.latent_out = 0
+        self.latent = Latent(self.args.s_latency, self.args.latent_decay, nargs=0)
 
     def forward(self, s, p):
         # in case we're working with a batch of unknown size
         # if len(s.shape) + 1 == len(p.shape):
         #     s = s.unsqueeze(0)
-        s, p = adj_batch_dims(s, p)
+        # s, p = adj_batch_dims(s, p)
         inp = torch.cat([s, p], dim=-1)
 
-        # update latent state
-        self.latent_arr[self.latent_idx] = inp
-        if (self.latent_idx + 1) % self.latency != 0:
-            # if it's not time to act, then update latent idx, decay old output, and return it
-            self.latent_idx += 1
-            self.latent_out = self.latent_out * self.latent_decay
-            return self.latent_out
-        # otherwise it's time to do some work! finally use latent_u
-        self.latent_idx = 0
-        cur_decay = 1
-        for i in range(1, self.latency):
-            cur_decay *= self.latent_decay
-            self.latent_arr[i] *= cur_decay
-        # sum of geometric series of length self.latency
-        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
-        inp = sum(self.latent_arr) / geom_sum
+        do_update = self.latent.step_inp(inp)
 
-        pred = self.W_sim(inp)
-        self.latent_out = pred
+        if do_update:
+            pred = self.W_sim(inp)
+            self.latent.step_out(pred)
 
-        return pred
+        return self.latent.get_out()
 
 class RecurrentSimulator(nn.Module):
     def __init__(self, args=DEFAULT_ARGS):
@@ -379,12 +364,6 @@ class MemorySimulator(nn.Module):
         self.latent_decay = self.args.latent_decay
         self.latent_out = 0
 
-# in case we're working with a batch of unknown size
-def adj_batch_dims(smaller, larger):
-    if len(smaller.shape) + 1 == len(larger.shape):
-        smaller = smaller.repeat((larger.shape[0], 1))
-    return (smaller, larger)
-
 # given current state and task, samples a proposal
 class VariationalHypothesizer(nn.Module):
     def __init__(self, args):
@@ -392,42 +371,60 @@ class VariationalHypothesizer(nn.Module):
         self.args = args
         self.sample_std = .5
 
+        # 2x size hidden layer for mean and logvar, +1 for confidence
         self.encoder = nn.Sequential(
-            nn.Linear(self.args.L + self.args.T, self.args.H),
+            nn.Linear(self.args.L + self.args.T, self.args.H * 2),
             nn.Tanh(),
-            nn.Linear(self.args.H, self.args.H * 2)
+            nn.Linear(self.args.H * 2, self.args.H * 2 + 1)
         )
-        self.W_H = nn.Linear(self.args.H, self.args.D)
+        self.decoder = nn.Sequential(
+            nn.Linear(self.args.H, self.args.H),
+            nn.Tanh(),
+            nn.Linear(self.args.H, self.args.D)
+        )
 
-        self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=1)
+        self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=2)
 
     def forward(self, s, t):
-        s, t = adj_batch_dims(s, t)
+        # s, t = adj_batch_dims(s, t)
         inp = torch.cat([s, t], dim=-1)
 
-        do_update = self.latent.next_inp(inp)
+        do_update = self.latent.step_inp(inp)
 
         # taken loosely from https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py
         if do_update:
             # encoding
-            h = self.encoder(inp)
+            h = self.encoder(self.latent.get_inp())
             mu = h[:,:self.args.H]
-            lvar = h[:,self.args.H:]
+            lvar = h[:,self.args.H:-1]
             # reparameterization
             std = torch.exp(0.5 * lvar)
             eps = torch.randn_like(std)
             z = eps * std + mu
             # decoding
-            prop = self.W_H(z)
+            prop = self.decoder(z)
+            conf = torch.sigmoid(h[:,-1])
             # calc KL for loss
-            kl = torch.sum(-0.5 * torch.sum(1 + lvar - mu ** 2 - lvar.exp(), dim=1), dim=0)
+            kl = -0.5 * torch.sum(1 + lvar - mu ** 2 - lvar.exp(), dim=1)
 
-            self.latent.next_out(prop, kl)
+            # 1 if we are confident, 0 if not and want to use simulator
+            # eps = torch.randn_like(conf)
+            # mask = eps < conf
+            
+            # cur_out = self.latent.get_out()
+            # # in case we're just starting training
+            # if cur_out is None:
+            #     cur_out = [torch.zeros_like(prop), torch.zeros_like(kl)]
+            # prop = torch.where(mask, prop, cur_out[0])
+            # kl = torch.where(mask, kl, cur_out[1])
+
+            self.latent.step_out(prop, kl, conf)
 
         return self.latent.get_out()
 
     def reset(self):
         self.latent.reset()
+
 
 class FFHypothesizer(nn.Module):
     def __init__(self, args):
@@ -442,10 +439,10 @@ class FFHypothesizer(nn.Module):
         self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=0)
 
     def forward(self, s, t):
-        s, t = adj_batch_dims(s, t)
+        # s, t = adj_batch_dims(s, t)
         inp = torch.cat([s, t], dim=-1)
 
-        do_update = self.latent.next_inp(inp)
+        do_update = self.latent.step_inp(inp)
 
         # if self.sample_std > 0:
         #     inp = inp + torch.normal(torch.zeros_like(inp), self.sample_std)
@@ -454,10 +451,10 @@ class FFHypothesizer(nn.Module):
 
         if do_update:
             prop = self.W_2(torch.tanh(self.W_1(inp)))
-            self.latent.next_out(prop)
+            self.latent.step_out(prop)
 
         # easy hack since kl is 0 if we don't use variational
-        return self.latent.get_out(), 0
+        return self.latent.get_out(), None, 1
 
     def reset(self):
         self.latent.reset()
@@ -479,8 +476,12 @@ class StateNet(nn.Module):
         self.reset()
 
     def _init_vars(self):
-        self.hypothesizer = VariationalHypothesizer(self.args)
-        #self.hypothesizer = FFHypothesizer(self.args)
+        if self.args.h_type == 'variational':
+            self.hypothesizer = VariationalHypothesizer(self.args)
+        elif self.args.h_type == 'ff':
+            self.hypothesizer = FFHypothesizer(self.args)
+        else:
+            raise NotImplementedError
 
         if self.args.use_reservoir:
             self.reservoir = Reservoir(self.args)
@@ -490,7 +491,11 @@ class StateNet(nn.Module):
 
 
     def forward(self, t, extras=False):
-        prop, kl = self.hypothesizer(self.s, t)
+        if self.s is None:
+            self._init_states(t)
+        t = self._adj_input_dim(t)
+        prop, kl, conf = self.hypothesizer(self.s, t)
+
         if self.args.use_reservoir:
             x = self.reservoir(prop)
             z = self.W_ro(x)
@@ -508,7 +513,26 @@ class StateNet(nn.Module):
             self.reservoir.reset(res_state=res_state)
         self.hypothesizer.reset()
         # initial condition
-        self.s = torch.zeros(self.args.Z)
+        self.s = None
+        self.p = None
+
+    def _init_states(self, t):
+        if len(t.shape) == 2:
+            self.s = torch.zeros(t.shape[0], self.args.Z)
+        elif len(t.shape) == 1:
+            self.s = torch.zeros(1, self.args.Z)
+        else:
+            print('input t failed somehow')
+            pdb.set_trace()
+
+    def _adj_input_dim(self, t):
+        if len(t.shape) == 2:
+            return t
+        elif len(t.shape) == 1:
+            return t.unsqueeze(0)
+        else:
+            print('input t failed somehow')
+            pdb.set_trace()
 
 
 
@@ -526,11 +550,23 @@ class HypothesisNet(nn.Module):
         if self.args.model_path is not None:
             self.load_state_dict(torch.load(args.model_path))
 
+        self.h_latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=2)
+        self.s_latent = Latent(self.args.s_latency, self.args.latent_decay, nargs=0)
+
+        self.reset()
+
     def _init_vars(self):
         rng_pt = torch.get_rng_state()
         torch.manual_seed(self.args.network_seed)
-        self.hypothesizer = Hypothesizer(self.args)
+        
+        if self.args.h_type == 'variational':
+            self.hypothesizer = VariationalHypothesizer(self.args)
+        elif self.args.h_type == 'ff':
+            self.hypothesizer = FFHypothesizer(self.args)
+        else:
+            raise NotImplementedError
         self.simulator = Simulator(self.args)
+
         if self.args.use_reservoir:
             self.reservoir = Reservoir(self.args)
             self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
@@ -539,6 +575,115 @@ class HypothesisNet(nn.Module):
         torch.set_rng_state(rng_pt)
 
     def forward(self, t, extras=False):
+        if self.s is None:
+            self._init_states(t)
+        t = self._adj_input_dim(t)
+        # make it a batch of one, can get rid of the outside later
+        for i in range(len(t)):
+            if self.c[i] == 'h':
+                cur_s = self.s[i].unsqueeze(0)
+                cur_t = t[i].unsqueeze(0)
+
+                if self.cur_h[i] is not None:
+                    self.cur_h[i] = self.hypothesizer(cur_s, cur_t)
+                    self.h_latent.latent_idx = 0
+
+                # did our hypothesis finish computing?
+                is_complete = self.h_latent.step()
+                if is_complete:
+                    prop, kl, conf = self.cur_h[i]
+                    # 1 if we are confident, 0 if not and want to use simulator
+                    if conf is None:
+                        conf = torch.tensor(1.)
+                    eps = torch.rand_like(conf)
+                    do_sim = eps > conf
+                    if do_sim:
+                        self.c[i] = 's'
+                    else:
+                        self.p[i] = prop, kl
+
+                else:
+                    # it didn't finish computing yet, so nothing's gonna happen
+                    pass
+
+            if self.c[i] == 's':
+                cur_s = self.s[i].unsqueeze(0)
+                cur_p = self.p[i][0].unsqueeze(0)
+
+                # there's nothing in the current s so we gon process something
+                if self.cur_s[i] is not None:
+                    pred = self.simulator(cur_s, cur_p)
+                    self.cur_s[i] = TRUE OR FALSE WHICH IS SOME COMPARISON
+                    self.s_latent.latent_idx = 0
+
+                is_complete = self.s_latent.step()
+                if is_complete:
+                    if self.cur_s[i]:
+                        # yay! it worked
+                        self.p[i] = self.cur_h[i]
+                        self.cur_h[i] = None
+                        self.cur_s[i] = None
+                    else:
+                        # oh no it failed, hypothesize something else
+                        # TODO: tell hypothesizer the old failure
+                        pass
+
+                    self.c[i] = 'h'
+
+            p = torch.cat([p[0] for p in self.p])
+            kl = [p[1] for p in self.p]
+
+            x = self.reservoir(p)
+            z = self.W_ro(x)
+            z = torch.clamp(z, -2, 2)
+            self.s = self.s + z
+            if extras:
+                return self.s, {'z': z, 'kl': kl, 'prop': prop}
+            return self.s
+
+            #     self.h_latent.add_input(cur_s, cur_t)
+            #     do_hypothesis = self.h_latent.step_inp([cur_s, cur_t])
+
+            #     # it's time to make a hypothesis
+            #     if do_hypothesis:
+            #         inp = self.h_latent.get_in()
+            #         prop, kl, conf = self.hypothesizer(inp)
+            #         self.h_latent.step_out(prop, kl, conf)
+            #         # 1 if we are confident, 0 if not and want to use simulator
+            #         if conf is None:
+            #             conf = torch.tensor(1.)
+            #         eps = torch.rand_like(conf)
+            #         do_sim = eps > conf
+            #     else:
+            #         do_sim = False
+
+            #     prop, kl, conf = self.h_latent.get_out()
+                
+            #     # in case we're just starting training
+            #     # if self.p[i] is None:
+            #     #     self.p[i] = [torch.zeros_like(prop), torch.zeros_like(kl)]
+            #     if do_sim:
+            #         self.c[i] = 's'
+                    
+            #     else:
+            #         self.p[i] = [prop, kl]
+
+            # elif self.c[i] == 's':
+            #     cur_s = self.s[i].unsqueeze(0)
+            #     cur_p = self.p[i][0].unsqueeze(0)
+            #     pdb.set_trace()
+            #     do_simulation = self.s_latent.step_inp(TODO)
+
+            #     if do_simulation:
+            #         inp = self.h_latent.get_in()
+            #         s_pred = self.simulator(inp)
+            #         self.s_latent.step_out(s_pred)
+
+            #     else:
+
+
+
+
         fail_count = 0
         while True:
             prop, kld = self.hypothesizer(self.s, t)
@@ -566,16 +711,6 @@ class HypothesisNet(nn.Module):
         u = prop
 
         x = self.reservoir(u)
-        # self.stride_step += 1
-        # if self.stride_step % self.stride == 0:
-        #     x = self.reservoir(u)
-        #     self.stride_step = 0
-        # else:
-        #     x = self.reservoir(-1)
-        #     if x.shape[0] != u.shape[0]:
-        #         # to expand hidden layer to appropriate batch size
-        #         mul = u.shape[0]
-        #         x = x.repeat((mul, 1))
 
         z = self.W_ro(x)
         pdb.set_trace()
@@ -592,22 +727,60 @@ class HypothesisNet(nn.Module):
 
 
     def reset(self, res_state=None):
-        self.reservoir.reset(res_state=res_state)
-        self.s = torch.zeros(self.args.Z)
+        if self.args.use_reservoir:
+            self.reservoir.reset(res_state=res_state)
+        self.s = None
+        self.p = None
+
+    def _init_states(self, t):
+        if len(t.shape) == 2:
+            self.s = torch.zeros(t.shape[0], self.args.Z)
+            self.c = ['h'] * t.shape[0]
+            self.p = [[torch.zeros(1, self.args.D), torch.zeros(1)] for i in range(t.shape[0])]
+            self.cur_h = [None] * t.shape[0]
+            self.cur_s = [None] * t.shape[0]
+        elif len(t.shape) == 1:
+            self.s = torch.zeros(1, self.args.Z)
+            self.c = ['h']
+            self.p = [[torch.zeros(1, self.args.D), torch.zeros(1)]]
+            self.cur_h = [None]
+            self.cur_s = [None]
+        else:
+            print('input t failed somehow')
+            pdb.set_trace()
+
+    def _adj_input_dim(self, t):
+        if len(t.shape) == 2:
+            return t
+        elif len(t.shape) == 1:
+            return t.unsqueeze(0)
+        else:
+            print('input t failed somehow')
+            pdb.set_trace()
 
 
-# so I don't have to keep writing the code for latent dynamics (e.g. it takes some time for network to operate and give result)
+# in case we're working with a batch of unknown size
+def adj_batch_dims(smaller, larger):
+    if len(smaller.shape) + 1 == len(larger.shape):
+        smaller = smaller.repeat((larger.shape[0], 1))
+    return (smaller, larger)
+
+def adj_inp_dims(inp):
+    if inp.shape == 0:
+        inp = inp.unsqueeze(0)
+
+
 class Latent:
     def __init__(self, latency, decay, nargs=0):
         self.nargs = nargs
         self.latency = latency
-        self.latent_idx = -1
-        self.latent_arr = [0] * self.latency
         self.latent_decay = decay
-        self.latent_out = []
-        self.latent_comp = None
+        self.reset()
 
-    def next_inp(self, inp):
+    def step(self):
+        self.latent_idx += 1
+    # call this all the time to give it input
+    def step_inp(self, inp):
         # update latent state
         self.latent_arr[self.latent_idx] = inp
         if (self.latent_idx + 1) % self.latency != 0:
@@ -623,18 +796,25 @@ class Latent:
             self.latent_arr[i] *= cur_decay
         # sum of geometric series of length self.latency
         geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
+
         self.inp = sum(self.latent_arr) / geom_sum
 
         return True
 
-    def next_out(self, out, *args):
+    # only call this when the computation is done
+    def step_out(self, out, *args):
         # replacing current out with computation done in the past
         if self.latent_comp is None:
-            self.latent_comp = [torch.zeros_like(out)] + [0] * self.nargs
+            self.latent_comp = [torch.zeros_like(out)] + [None] * self.nargs
         self.latent_out = self.latent_comp
         self.latent_comp = [out] + list(args)
 
+    def get_inp(self):
+        return self.inp
+
     def get_out(self):
+        if self.latent_out is None:
+            return None
         if self.nargs == 0:
             return self.latent_out[0]
         else:
@@ -643,6 +823,61 @@ class Latent:
     def reset(self):
         self.latent_idx = -1
         self.latent_arr = [0] * self.latency
-        self.latent_out = [0,0]
+        self.latent_out = None
+        self.latent_comp = None
+
+# so I don't have to keep writing the code for latent dynamics (e.g. it takes some time for network to operate and give result)
+class Latent:
+    def __init__(self, latency, decay, nargs=0):
+        self.nargs = nargs
+        self.latency = latency
+        self.latent_decay = decay
+        self.reset()
+
+    # call this all the time to give it input
+    def step_inp(self, inp):
+        # update latent state
+        self.latent_arr[self.latent_idx] = inp
+        if (self.latent_idx + 1) % self.latency != 0:
+            # if it's not time to act, then update latent idx, decay old output, and return it
+            self.latent_idx += 1
+            self.latent_out[0] = self.latent_out[0] * self.latent_decay
+            return False
+        # otherwise it's time to do some work! finally use latent_u
+        self.latent_idx = 0
+        cur_decay = 1
+        for i in range(1, self.latency):
+            cur_decay *= self.latent_decay
+            self.latent_arr[i] *= cur_decay
+        # sum of geometric series of length self.latency
+        geom_sum = (1 - self.latent_decay ** self.latency) / (1 - self.latent_decay)
+
+        self.inp = sum(self.latent_arr) / geom_sum
+
+        return True
+
+    # only call this when the computation is done
+    def step_out(self, out, *args):
+        # replacing current out with computation done in the past
+        if self.latent_comp is None:
+            self.latent_comp = [torch.zeros_like(out)] + [None] * self.nargs
+        self.latent_out = self.latent_comp
+        self.latent_comp = [out] + list(args)
+
+    def get_inp(self):
+        return self.inp
+
+    def get_out(self):
+        if self.latent_out is None:
+            return None
+        if self.nargs == 0:
+            return self.latent_out[0]
+        else:
+            return self.latent_out
+
+    def reset(self):
+        self.latent_idx = -1
+        self.latent_arr = [0] * self.latency
+        self.latent_out = None
         self.latent_comp = None
 

@@ -70,7 +70,7 @@ def goals_loss(out, targets, indices, p_fn, threshold=1, update=True):
     # update the indices while we're at it
     if update:
         indices = update_goal_indices(targets, indices, done)
-    loss = torch.sum(dists) - indices.sum() + sum(ps)
+    loss = torch.sum(dists) - 2 * indices.sum() + sum(ps)
     return loss, indices
 
 # updating indices array to get the next targets for sequential goals
