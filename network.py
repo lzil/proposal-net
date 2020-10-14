@@ -21,8 +21,7 @@ DEFAULT_ARGS = {
     'Z': 2,
     'H': 3,
     'use_reservoir': True,
-    'res_init_type': 'gaussian',
-    'res_init_params': {'std': 1.5},
+    'res_init_std': 1.5,
     'res_burn_steps': 200,
     'res_noise': 0,
     'bias': True,
@@ -39,7 +38,8 @@ DEFAULT_ARGS = {
     's_latency': 10,
     'h_latency': 10,
 
-    'res_path': None
+    'res_path': None,
+    'sim_path': None
 }
 
 # reservoir network. shouldn't be trained
@@ -58,9 +58,6 @@ class Reservoir(nn.Module):
         self.noise_std = self.args.res_noise
 
         self._init_vars()
-        if args.res_path is not None:
-            self.load_state_dict(torch.load(args.res_path))
-
         self.reset()
 
     def _init_vars(self):
@@ -70,7 +67,11 @@ class Reservoir(nn.Module):
         self.W_u.weight.data = torch.normal(0, self.args.res_init_std, self.W_u.weight.shape) / np.sqrt(self.args.N)
         self.J = nn.Linear(self.args.N, self.args.N, bias=False)
         self.J.weight.data = torch.normal(0, self.args.res_init_std, self.J.weight.shape) / np.sqrt(self.args.N)
+        # print(self.J.weight.data[0])
         torch.set_rng_state(rng_pt)
+
+        if self.args.res_path is not None:
+            self.load_state_dict(torch.load(self.args.res_path))
 
     def burn_in(self, steps):
         for i in range(steps):
@@ -188,19 +189,17 @@ class Simulator(nn.Module):
         args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         super().__init__()
         self.args = args
+        
+        self._init_vars()
+        if args.sim_path is not None:
+            self.load_state_dict(torch.load(args.sim_path))
 
-        self.activation = torch.tanh
-        self.tau_x = 10
-
-        # weights in the recurrent net
+    def _init_vars(self):
         self.W_sim = nn.Sequential(
             nn.Linear(self.args.L + self.args.D, 16, bias=self.args.bias),
             nn.Tanh(),
             nn.Linear(16, self.args.L, bias=self.args.bias)
         )
-
-        # dealing with latent output
-        # self.latent = Latent(self.args.s_latency, self.args.latent_decay, nargs=0)
 
     def forward(self, s, p):
         # in case we're working with a batch of unknown size
@@ -339,7 +338,6 @@ class MemorySimulator(nn.Module):
         self.latent_decay = self.args.latent_decay
         self.latent_out = 0
 
-# given current state and task, samples a proposal
 class VariationalHypothesizer(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -516,29 +514,35 @@ class HypothesisNet(nn.Module):
         if not hasattr(self.args, 'network_seed'):
             self.args.network_seed = random.randrange(1e6)
         self._init_vars()
-        if self.args.model_path is not None:
-            self.load_state_dict(torch.load(args.model_path))
+        
 
         self.reset()
 
     def _init_vars(self):
         rng_pt = torch.get_rng_state()
         torch.manual_seed(self.args.network_seed)
-        
+        # hypothesizer
         if self.args.h_type == 'variational':
             self.hypothesizer = VariationalHypothesizer(self.args)
         elif self.args.h_type == 'ff':
             self.hypothesizer = FFHypothesizer(self.args)
         else:
             raise NotImplementedError
+        # simulator
         self.simulator = Simulator(self.args)
-
+        # reservoir
         if self.args.use_reservoir:
             self.reservoir = Reservoir(self.args)
             self.W_ro = nn.Linear(self.args.N, self.args.Z, bias=self.args.bias)
         else:
             self.W_ro = nn.Linear(self.args.D, self.args.Z, bias=self.args.bias)
         torch.set_rng_state(rng_pt)
+
+        if self.args.model_path is not None:
+            self.load_state_dict(torch.load(self.args.model_path))
+
+        # in case reservoir seed/path overwrites
+        self.reservoir._init_vars()
 
     def forward(self, t, extras=False):
         if self.s is None:
@@ -586,6 +590,9 @@ class HypothesisNet(nn.Module):
                 if self.cur_s[i] is None:
                     pred = self.simulator(cur_s, cur_p)
                     self.cur_s[i] = True#TRUE OR FALSE WHICH IS SOME COMPARISON
+                    cur_dist = torch.norm(t[i] - self.s[i], dim=-1)
+                    prop_dist = torch.norm(t[i] - pred[i], dim=-1)
+                    self.cur_s[i] = prop_dist < cur_dist
 
                 s_done = self.s_latent[i].step()
                 if s_done:
