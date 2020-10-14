@@ -517,7 +517,7 @@ def parse_args():
     # parser.add_argument('--Wro_path', type=str, default=None, help='start training from certain Wro')
     # parser.add_argument('--Wf_path', type=str, default=None, help='start training from certain Wf')
     parser.add_argument('--res_path', type=str, default=None, help='saved, probably trained, reservoir. should be saved with seed tho')
-    # parser.add_argument('--simulator_path', type=str, default=None, help='saved simulator')
+    parser.add_argument('--sim_path', type=str, default=None, help='saved, probably trained, simulator')
     
     parser.add_argument('--no_reservoir', action='store_true', help='leave out the reservoir completely')
     parser.add_argument('--no_bias', action='store_true')
