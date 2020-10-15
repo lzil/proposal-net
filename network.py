@@ -355,6 +355,10 @@ class VariationalHypothesizer(nn.Module):
             nn.Tanh(),
             nn.Linear(self.args.H, self.args.D)
         )
+        self.confider = nn.Sequential(
+            nn.Linear(self.args.H, 1),
+            nn.Sigmoid()
+        )
 
         # self.latent = Latent(self.args.h_latency, self.args.latent_decay, nargs=2)
 
@@ -372,9 +376,13 @@ class VariationalHypothesizer(nn.Module):
         std = torch.exp(0.5 * lvar)
         eps = torch.randn_like(std)
         z = eps * std + mu
+        # get log probs for confidence
+        lprobs = torch.distributions.normal.Normal(mu, std).log_prob(z)
+        conf = self.confider(lprobs)
+        pdb.set_trace()
         # decoding
         prop = self.decoder(z)
-        conf = torch.sigmoid(torch.max(h[:,self.args.H:], dim=-1)[0])
+        # conf = torch.sigmoid(-torch.max(h[:,self.args.H:], dim=-1)[0])
         # calc KL for loss
         kl = -0.5 * torch.sum(1 + lvar - mu ** 2 - lvar.exp(), dim=1)
 
