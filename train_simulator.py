@@ -25,11 +25,8 @@ def train(config):
 
     net = HypothesisNet(config)
 
-    # simulator = Simulator(config)
-    # reservoir = Reservoir()
-
     if not config.no_log:
-        log = log_this(net.args, 'logs', config.name, checkpoints=False)
+        log = log_this(net.args, 'logs/sim', config.name, checkpoints=False)
 
     simulator = net.simulator
     reservoir = net.reservoir
@@ -41,7 +38,7 @@ def train(config):
     train_params = simulator.parameters()
     optimizer = optim.Adam(train_params, lr=1e-3)
 
-    for i in range(1000):
+    for i in range(2000):
 
         reservoir.reset()
         optimizer.zero_grad()
@@ -128,7 +125,7 @@ def test(config):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--name', default='sim_test')
+    parser.add_argument('--name', default='test')
     parser.add_argument('--sim_seed', default=0, type=int)
     parser.add_argument('--res_seed', default=0, type=int)
     parser.add_argument('--res_x_seed', default=0, type=int)
@@ -137,6 +134,8 @@ if __name__ == '__main__':
     parser.add_argument('--no_log', action='store_true')
     parser.add_argument('--test', action='store_true')
     args = parser.parse_args()
+
+    args.name = ''
 
     if args.test and args.model_path is not None:
         test(args)

@@ -440,6 +440,7 @@ class Trainer:
 
                 if ix % self.log_interval == 0:
                     outs = etc['outs']
+                    
                     z = np.stack(outs).squeeze()
                     # avg of the last 50 trials
                     avg_loss = running_loss / self.args.batch_size / self.log_interval
@@ -455,6 +456,11 @@ class Trainer:
                     if self.args.dset_type == 'goals':
                         avg_index = test_etc['indices'].float().mean().item()
                         log_arr.append(f'avg index {avg_index:.3f}')
+                    if self.args.net == 'hypothesis':
+                        ha = self.net.hyp_approval.get_input()
+                        sa = self.net.sim_approval.get_input()
+                        log_arr.append(f'hyp_app {ha:.3f}')
+                        log_arr.append(f'sim_app {sa:.3f}')
                     log_str = '\t| '.join(log_arr)
                     logging.info(log_str)
 
@@ -518,13 +524,21 @@ def parse_args():
     # parser.add_argument('--Wf_path', type=str, default=None, help='start training from certain Wf')
     parser.add_argument('--res_path', type=str, default=None, help='saved, probably trained, reservoir. should be saved with seed tho')
     parser.add_argument('--sim_path', type=str, default=None, help='saved, probably trained, simulator')
+
+    # seeds
+    parser.add_argument('--seed', type=int, help='seed for everything else')
+    parser.add_argument('--network_seed', type=int, help='seed for the network')
+    parser.add_argument('--res_seed', type=int, help='seed for reservoir')
+    parser.add_argument('--res_x_seed', type=int, default=0, help='seed for reservoir init hidden states')
+
+    # res_seed will be overwritten by res_path every time
     
     parser.add_argument('--no_reservoir', action='store_true', help='leave out the reservoir completely')
     parser.add_argument('--no_bias', action='store_true')
 
     parser.add_argument('--res_init_std', type=float, default=1.5)
     
-    parser.add_argument('--res_burn_steps', type=int, default=200, help='number of steps for reservoir to burn in')
+    parser.add_argument('--res_burn_steps', type=int, default=100, help='number of steps for reservoir to burn in')
     parser.add_argument('--network_delay', type=int, default=0)
     parser.add_argument('--res_noise', type=float, default=0)
 
@@ -532,8 +546,8 @@ def parse_args():
     parser.add_argument('--latent_decay', type=float, default=.8, help='proportion to keep from the last state')
     parser.add_argument('--r_latency', type=int, default=1, help='how many operation steps it takes to move one step')
     # parser.add_argument('--r_input_decay', type=float, default=1, help='decay of res input for each step w/o input')
-    parser.add_argument('--h_latency', type=int, default=1, help='how many operation steps it takes to move one step')
-    parser.add_argument('--s_latency', type=int, default=1, help='how many operation steps it takes to move one step')
+    parser.add_argument('--h_latency', type=int, default=3, help='how many operation steps it takes to move one step')
+    parser.add_argument('--s_latency', type=int, default=3, help='how many operation steps it takes to move one step')
     
     parser.add_argument('--out_act', type=str, default='none', help='output activation')
 
@@ -560,11 +574,7 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate. adam only')
     parser.add_argument('--n_epochs', type=int, default=10, help='number of epochs to train for. adam only')
 
-    # seeds
-    parser.add_argument('--seed', type=int, help='seed for everything else')
-    parser.add_argument('--network_seed', type=int, help='seed for the network')
-    parser.add_argument('--res_seed', type=int, help='seed for reservoir')
-    parser.add_argument('--res_x_seed', type=int, default=0, help='seed for reservoir init hidden states')
+    
 
     # parser.add_argument('-x', '--reservoir_x_init', type=str, default=None, help='other seed options for reservoir')
 

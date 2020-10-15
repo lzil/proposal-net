@@ -514,7 +514,8 @@ class HypothesisNet(nn.Module):
         if not hasattr(self.args, 'network_seed'):
             self.args.network_seed = random.randrange(1e6)
         self._init_vars()
-        
+        self.hyp_approval = Latent(1, 0.9)
+        self.sim_approval = Latent(1, 0.9)
 
         self.reset()
 
@@ -573,7 +574,9 @@ class HypothesisNet(nn.Module):
                     do_sim = eps > conf
                     if do_sim:
                         self.c[i] = 's'
+                        self.hyp_approval.add_input(0)
                     else:
+                        self.hyp_approval.add_input(1)
                         self.p[i] = self.cur_h[i]
                         self.cur_h[i] = None
 
@@ -588,20 +591,26 @@ class HypothesisNet(nn.Module):
 
                 # there's nothing in the current s so we gon process something
                 if self.cur_s[i] is None:
+                    # print('simulating hypothesis')
                     pred = self.simulator(cur_s, cur_p)
-                    self.cur_s[i] = True#TRUE OR FALSE WHICH IS SOME COMPARISON
+                    # self.cur_s[i] = True#TRUE OR FALSE WHICH IS SOME COMPARISON
+                    # pdb.set_trace()
                     cur_dist = torch.norm(t[i] - self.s[i], dim=-1)
-                    prop_dist = torch.norm(t[i] - pred[i], dim=-1)
+                    prop_dist = torch.norm(t[i] - pred[0], dim=-1)
                     self.cur_s[i] = prop_dist < cur_dist
 
                 s_done = self.s_latent[i].step()
                 if s_done:
                     if self.cur_s[i]:
+                        self.sim_approval.add_input(1)
+                        # print('hypothesis worked')
                         # yay! it worked
                         self.p[i] = self.cur_h[i]
                         self.cur_h[i] = None
                         self.cur_s[i] = None
                     else:
+                        self.sim_approval.add_input(0)
+                        # print('hypothesis failed')
                         # oh no it failed, hypothesize something else
                         # TODO: tell hypothesizer the old failure
                         pass
@@ -615,6 +624,8 @@ class HypothesisNet(nn.Module):
         z = self.W_ro(x)
         z = torch.clamp(z, -2, 2)
         self.s = self.s + z
+        # ha = self.hyp_approval.get_input(clear=False)
+        # sa = self.sim_approval.get_input(clear=False)
         if extras:
             return self.s, {'z': z, 'kl': kl, 'prop': p}
         return self.s
@@ -707,7 +718,7 @@ def adj_inp_dims(inp):
 
 
 class Latent:
-    def __init__(self, latency, decay, nargs=0):
+    def __init__(self, latency, decay):
         self.latency = latency
         self.latent_decay = decay
         self.reset()
@@ -732,7 +743,7 @@ class Latent:
         else:
             self.latent_arr.append(list(inp))
 
-    def get_input(self):
+    def get_input(self, clear=True):
         n_inps = len(self.latent_arr)
         assert n_inps > 0
         cur_decay = 1
@@ -752,7 +763,8 @@ class Latent:
             geom_sum = (1 - self.latent_decay ** n_inps) / (1 - self.latent_decay)
             inp = [sum(i) / geom_sum for i in list(zip(*self.latent_arr))]
 
-        self.latent_arr = []
+        if clear:
+            self.latent_arr = []
 
         return inp
 
