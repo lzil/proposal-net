@@ -344,11 +344,11 @@ class VariationalHypothesizer(nn.Module):
         self.args = args
         self.sample_std = .5
 
-        # 2x size hidden layer for mean and logvar, +1 for confidence
+        # 2x size hidden layer for mean and logvar
         self.encoder = nn.Sequential(
             nn.Linear(self.args.L + self.args.T, self.args.H * 2),
             nn.Tanh(),
-            nn.Linear(self.args.H * 2, self.args.H * 2 + 1)
+            nn.Linear(self.args.H * 2, self.args.H * 2 )
         )
         self.decoder = nn.Sequential(
             nn.Linear(self.args.H, self.args.H),
@@ -367,14 +367,14 @@ class VariationalHypothesizer(nn.Module):
         # encoding
         h = self.encoder(inp)
         mu = h[:,:self.args.H]
-        lvar = h[:,self.args.H:-1]
+        lvar = h[:,self.args.H:]
         # reparameterization
         std = torch.exp(0.5 * lvar)
         eps = torch.randn_like(std)
         z = eps * std + mu
         # decoding
         prop = self.decoder(z)
-        conf = torch.sigmoid(h[:,-1])
+        conf = torch.sigmoid(torch.max(h[:,self.args.H:], dim=-1)[0])
         # calc KL for loss
         kl = -0.5 * torch.sum(1 + lvar - mu ** 2 - lvar.exp(), dim=1)
 
@@ -514,8 +514,11 @@ class HypothesisNet(nn.Module):
         if not hasattr(self.args, 'network_seed'):
             self.args.network_seed = random.randrange(1e6)
         self._init_vars()
-        self.hyp_approval = Latent(1, 0.9)
-        self.sim_approval = Latent(1, 0.9)
+        self.hyp_approval = Latent(1, 0.8)
+        self.sim_approval = Latent(1, 0.8)
+        self.confidence = Latent(1, 0.8)
+
+        self.switch = True
 
         self.reset()
 
@@ -550,7 +553,7 @@ class HypothesisNet(nn.Module):
             self._init_states(t)
         t = self._adj_input_dim(t)
         # do everything one by one
-        
+
         for i in range(len(t)):
             cur_s = self.s[i].unsqueeze(0)
             cur_t = t[i].unsqueeze(0)
@@ -567,9 +570,11 @@ class HypothesisNet(nn.Module):
                 h_done = self.h_latent[i].step()
                 if h_done:
                     prop, kl, conf = self.cur_h[i]
+                    conf = conf[0]
                     # 1 if we are confident, 0 if not and want to use simulator
                     if conf is None:
                         conf = torch.tensor(1.)
+                    self.confidence.add_input(conf.item())
                     eps = torch.rand_like(conf)
                     do_sim = eps > conf
                     if do_sim:
@@ -591,13 +596,15 @@ class HypothesisNet(nn.Module):
 
                 # there's nothing in the current s so we gon process something
                 if self.cur_s[i] is None:
-                    # print('simulating hypothesis')
-                    pred = self.simulator(cur_s, cur_p)
-                    # self.cur_s[i] = True#TRUE OR FALSE WHICH IS SOME COMPARISON
-                    # pdb.set_trace()
-                    cur_dist = torch.norm(t[i] - self.s[i], dim=-1)
-                    prop_dist = torch.norm(t[i] - pred[0], dim=-1)
-                    self.cur_s[i] = prop_dist < cur_dist
+                    if self.switch:
+                        self.cur_s[i] = True
+                    else:
+                        # print('simulating hypothesis')
+                        pred = self.simulator(cur_s, cur_p)
+                        # self.cur_s[i] = True#TRUE OR FALSE WHICH IS SOME COMPARISON
+                        cur_dist = torch.norm(t[i] - self.s[i], dim=-1)
+                        prop_dist = torch.norm(t[i] - pred[0], dim=-1)
+                        self.cur_s[i] = prop_dist < cur_dist
 
                 s_done = self.s_latent[i].step()
                 if s_done:

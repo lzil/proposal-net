@@ -34,26 +34,6 @@ class Trainer:
         elif self.args.net == 'hypothesis':
             self.net = HypothesisNet(self.args)
 
-        # load any specified model parameters into the network
-        # if args.model_path is not None:
-        #     m_dict = torch.load(args.model_path)
-        #     self.net.load_state_dict(m_dict)
-        #     logging.info(f'Loaded model file from {args.model_path}.')
-        # if args.Wf_path is not None:
-        #     m_dict = torch.load(args.Wf_path)
-        #     self.net.W_f.weight = m_dict['W_f.weight']
-        #     if 'W_f.bias' in m_dict:
-        #         self.net.W_f.bias = m_dict['W_f.bias']
-        # if args.Wro_path is not None:
-        #     m_dict = torch.load(args.Wro_path)
-        #     self.net.W_ro.weight = m_dict['W_ro.weight']
-        #     if 'W_ro.bias' in m_dict:
-        #         self.net.W_ro.bias = m_dict['W_ro.bias']
-        # if args.reservoir_path is not None:
-        #     m_dict = torch.load(args.Wro_path)
-        #     self.net.reservoir.J.weight = m_dict['reservoir.J.weight']
-        #     self.net.reservoir.W_u.weight = m_dict['reservoir.W_u.weight']
-
         # getting number of elements of every parameter
         self.n_params = {}
         self.train_params = []
@@ -434,6 +414,9 @@ class Trainer:
                     ending = True
                     break
 
+                if ix > 300:
+                    self.net.switch = False
+
                 running_loss += loss.item()
                 # mag = max([torch.max(torch.abs(p.grad)) for p in self.train_params])
                 # running_mag += mag             
@@ -459,8 +442,10 @@ class Trainer:
                     if self.args.net == 'hypothesis':
                         ha = self.net.hyp_approval.get_input()
                         sa = self.net.sim_approval.get_input()
+                        conf = self.net.confidence.get_input()
                         log_arr.append(f'hyp_app {ha:.3f}')
                         log_arr.append(f'sim_app {sa:.3f}')
+                        log_arr.append(f'conf {conf:.3f}')
                     log_str = '\t| '.join(log_arr)
                     logging.info(log_str)
 

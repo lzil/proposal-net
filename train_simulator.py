@@ -135,8 +135,6 @@ if __name__ == '__main__':
     parser.add_argument('--test', action='store_true')
     args = parser.parse_args()
 
-    args.name = ''
-
     if args.test and args.model_path is not None:
         test(args)
     else:
