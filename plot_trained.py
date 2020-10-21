@@ -62,7 +62,7 @@ if args.test_all:
     print('avg summed loss (all):', loss2)
 
 if not args.no_plot:
-    data, loss = test_model(net, config, n_tests=12)
+    data, loss = test_model(net, config, n_tests=6)
     print('avg summed loss (plotted):', loss)
 
     run_id = '/'.join(args.model.split('/')[-3:-1])

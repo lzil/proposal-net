@@ -38,21 +38,21 @@ def train(args):
 
     criterion = nn.MSELoss()
     train_params = simulator.parameters()
-    optimizer = optim.Adam(train_params, lr=1e-3)
+    optimizer = optim.Adam(train_params, lr=args.lr)
 
     for i in range(args.iters):
 
         if not args.no_reservoir:
-            layer.reset()
+            layer.reset('random')
         optimizer.zero_grad()
 
-        prop = torch.Tensor(np.random.normal(0, 10, size=(batch_size, net.args.D)))
+        prop = torch.Tensor(np.random.normal(0, 5, size=(batch_size, net.args.D)))
         state = torch.Tensor(np.random.normal(0, 10, size=(batch_size, net.args.L)))
         sim_out = simulator(state, prop)
 
         # run reservoir 10 steps, so predict 10 steps in future
         outs = []
-        for j in range(10):
+        for j in range(args.forward_steps):
             outs.append(layer(prop))
 
         actions = sum(outs)
@@ -64,11 +64,8 @@ def train(args):
         layer_out_val = actions.roll(1, 0) + state
 
         # calculate euclidean loss
-        diff = torch.norm(layer_out - sim_out, dim=1)
-        loss = criterion(diff, torch.zeros_like(diff))
-
-        diff_val = torch.norm(layer_out_val - sim_out, dim=1)
-        loss_val = criterion(diff_val, torch.zeros_like(diff_val))
+        loss = criterion(layer_out, sim_out)
+        loss_val = criterion(layer_out_val, sim_out)
 
         loss.backward()
         optimizer.step()
@@ -78,8 +75,10 @@ def train(args):
 
     if not args.no_log:
         save_model_path = os.path.join(log.run_dir, f'model_{log.run_id}.pth')
+        save_sim_path = os.path.join(log.run_dir, f'sim_{log.run_id}.pth')
         torch.save(net.state_dict(), save_model_path)
-        print(f'saved model to {save_model_path}')
+        torch.save(simulator.state_dict(), save_sim_path)
+        print(f'saved model to {save_model_path}, sim to {save_sim_path}')
 
 def test(args):
     net = HypothesisNet(args)
@@ -88,14 +87,14 @@ def test(args):
     reservoir = net.reservoir
     W_ro = net.W_ro
 
+    net.eval()
+
     batch_size = 50
 
     criterion = nn.MSELoss()
     train_params = simulator.parameters()
-    optimizer = optim.Adam(train_params, lr=1e-3)
 
-    reservoir.reset()
-    optimizer.zero_grad()
+    reservoir.reset('random')
 
     prop = torch.Tensor(np.random.normal(size=(batch_size, net.args.D)))
     state = torch.Tensor(np.random.normal(size=(batch_size, net.args.L)))
@@ -104,7 +103,7 @@ def test(args):
 
     # run reservoir 10 steps, so predict 10 steps in future
     outs = []
-    for j in range(10):
+    for j in range(args.forward_steps):
         outs.append(W_ro(reservoir(prop)))
 
     actions = sum(outs)
@@ -114,11 +113,8 @@ def test(args):
     sim_out_val = sim_out.roll(1, 0) + state
 
     # calculate euclidean loss
-    diff = torch.norm(layer_out - sim_out, dim=1)
-    loss = criterion(diff, torch.zeros_like(diff))
-
-    diff2 = torch.norm(layer_out - sim_out_val, dim=1)
-    loss2 = criterion(diff2, torch.zeros_like(diff))
+    loss = criterion(layer_out, sim_out)
+    loss2 = criterion(layer_out, sim_out_val)
 
 
     print(f'loss {loss}, loss2 {loss2}')
@@ -130,12 +126,12 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', default='test')
-    parser.add_argument('--sim_seed', default=0, type=int)
     parser.add_argument('--res_seed', default=0, type=int)
     parser.add_argument('--res_x_seed', default=0, type=int)
     parser.add_argument('--model_path', default=None, type=str)
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--iters', default=4000, type=int, help='number of iterations to train for')
+    parser.add_argument('--forward_steps', default=5, type=int)
 
     parser.add_argument('--no_reservoir', action='store_true')
 

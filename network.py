@@ -378,7 +378,8 @@ class VariationalHypothesizer(nn.Module):
         # decoding
 
         prop_conf = self.decoder(z_lprobs)
-        prop = prop_conf[:,:-1]
+        prop = 10 * torch.tanh(prop_conf[:,:-1])
+        # prop = prop_conf[:,:-1]
         conf = torch.sigmoid(prop_conf[:,-1])
         # conf = torch.sigmoid(-torch.max(h[:,self.args.H:], dim=-1)[0])
         # calc KL for loss
@@ -506,9 +507,9 @@ class HypothesisNet(nn.Module):
         if not hasattr(self.args, 'network_seed'):
             self.args.network_seed = random.randrange(1e6)
         self._init_vars()
-        self.log_h_yes = Latent(1, 0.8)
-        self.log_s_yes = Latent(1, 0.8)
-        self.log_conf = Latent(1, 0.8)
+        self.log_h_yes = Latent(1, 0.9)
+        self.log_s_yes = Latent(1, 0.9)
+        self.log_conf = Latent(1, 0.9)
 
         self.switch = False
 
@@ -533,14 +534,17 @@ class HypothesisNet(nn.Module):
             self.W_ro = nn.Linear(self.args.D, self.args.Z, bias=self.args.bias)
         torch.set_rng_state(rng_pt)
 
-        if self.args.model_path is not None:
-            self.load_state_dict(torch.load(self.args.model_path))
-
         # in case reservoir seed/path overwrites
         if self.args.use_reservoir:
             self.reservoir._init_vars()
 
+        if self.args.model_path is not None:
+            self.load_state_dict(torch.load(self.args.model_path))
+
+
     def forward(self, t, extras=False):
+        # print(self.reservoir.J.weight)
+        # pdb.set_trace()
         if self.s is None:
             self._init_states(t)
         t = self._adj_input_dim(t)
@@ -559,6 +563,7 @@ class HypothesisNet(nn.Module):
                     
                     inp = self.h_latent[i].get_input()
                     # using very current data
+                    # pdb.set_trace()
                     self.cur_h[i] = self.hypothesizer(cur_s, cur_t)
                     # using latent data
                     # self.cur_h[i] = self.hypothesizer(*inp)
@@ -589,6 +594,10 @@ class HypothesisNet(nn.Module):
                         # print('h accepted, put in self.p')
                         self.cur_h[i] = None
 
+                        # the cheating part where we check if it worked anyway
+
+                        # lconf.append(10 * loss_confidence(self.cur_h[i][2][0], self.cur_s[i]))
+
                 else:
                     # it didn't finish computing yet, so nothing's gonna happen
                     pass
@@ -611,7 +620,7 @@ class HypothesisNet(nn.Module):
                         # self.cur_s[i] = True#TRUE OR FALSE WHICH IS SOME COMPARISON
                         
                         dist_prop = torch.norm(t[i] - pred_prop[0])
-                        dist_cur = torch.norm(t[i] - self.s[i])
+                        dist_cur = torch.norm(t[i] - pred_cur[0])
                         # pdb.set_trace()
                         self.cur_s[i] = dist_prop < dist_cur
 
@@ -619,7 +628,7 @@ class HypothesisNet(nn.Module):
                 if s_done:
                     # print('s done')
                     # confidence loss
-                    lconf.append(100 * loss_confidence(self.cur_h[i][2][0], self.cur_s[i]))
+                    lconf.append(10 * loss_confidence(self.cur_h[i][2][0], self.cur_s[i]))
                     if self.cur_s[i]:
                         self.log_s_yes.add_input(1)
                         # print('hypothesis worked')
@@ -743,7 +752,7 @@ def adj_inp_dims(inp):
 class Latent:
     def __init__(self, latency, decay):
         self.latency = latency
-        self.latent_decay = decay
+        self.decay = decay
         self.reset()
 
     def step(self):
@@ -772,18 +781,18 @@ class Latent:
         cur_decay = 1
         if self.inp_len == 1:
             for i in range(n_inps-2, -1, -1):
-                cur_decay *= self.latent_decay
+                cur_decay *= self.decay
                 self.latent_arr[i] = self.latent_arr[i] * cur_decay
             # sum of geometric series of length self.latency
-            geom_sum = (1 - self.latent_decay ** n_inps) / (1 - self.latent_decay)
+            geom_sum = (1 - self.decay ** n_inps) / (1 - self.decay)
             inp = sum(self.latent_arr) / geom_sum
         else:
             for i in range(n_inps-2, -1, -1):
-                cur_decay *= self.latent_decay
+                cur_decay *= self.decay
                 for j in range(self.inp_len):
                     self.latent_arr[i][j] = self.latent_arr[i][j] * cur_decay
             # sum of geometric series of length self.latency
-            geom_sum = (1 - self.latent_decay ** n_inps) / (1 - self.latent_decay)
+            geom_sum = (1 - self.decay ** n_inps) / (1 - self.decay)
             inp = [sum(i) / geom_sum for i in list(zip(*self.latent_arr))]
 
         if clear:
