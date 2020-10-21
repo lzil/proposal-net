@@ -73,6 +73,13 @@ def goals_loss(out, targets, indices, p_fn, threshold=1, update=True):
     loss = torch.sum(dists) - 2 * indices.sum() + sum(ps)
     return loss, indices
 
+# loss function for confidence
+# labels are whether the simulator judged them to be right or wrong
+def loss_confidence(conf, labels):
+    loss = torch.square(conf - labels.long())
+    loss = loss + 5 * labels.long() * loss
+    return loss
+
 # updating indices array to get the next targets for sequential goals
 def update_goal_indices(targets, indices, done):
     indices = torch.clamp(indices + done, 0, len(targets[0]) - 1)

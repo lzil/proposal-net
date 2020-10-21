@@ -15,7 +15,7 @@ import csv
 import math
 import json
 
-from network import Reservoir, HypothesisNet
+from network import HypothesisNet
 
 from utils import log_this, load_rb, Bunch, fill_undefined_args
 from helpers import get_optimizer, get_criterion
@@ -26,28 +26,25 @@ def train(args):
     net = HypothesisNet(args)
 
     if not args.no_log:
-        log = log_this(net.args, 'logs/sim', args.name, checkpoints=False)
+        log = log_this(net.args, 'logs/hyp', args.name, checkpoints=False)
 
     simulator = net.simulator
-    if args.no_reservoir:
-        layer = net.W_ro
-    else:
-        layer = net.reservoir
+    hypothesizer = net.hypothesizer
 
     batch_size = 10
 
     criterion = nn.MSELoss()
-    train_params = simulator.parameters()
+    train_params = hypothesizer.parameters()
     optimizer = optim.Adam(train_params, lr=1e-3)
 
     for i in range(args.iters):
 
-        if not args.no_reservoir:
-            layer.reset()
         optimizer.zero_grad()
 
-        prop = torch.Tensor(np.random.normal(0, 10, size=(batch_size, net.args.D)))
         state = torch.Tensor(np.random.normal(0, 10, size=(batch_size, net.args.L)))
+        task = torch.Tensor(np.random.normal(0, 10, size=(batch_size, net.args.L)))
+
+        prop = hypothesizer(state, task)
         sim_out = simulator(state, prop)
 
         # run reservoir 10 steps, so predict 10 steps in future
@@ -134,7 +131,7 @@ if __name__ == '__main__':
     parser.add_argument('--res_seed', default=0, type=int)
     parser.add_argument('--res_x_seed', default=0, type=int)
     parser.add_argument('--model_path', default=None, type=str)
-    parser.add_argument('--lr', default=1e-3, type=float)
+    parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
     parser.add_argument('--iters', default=4000, type=int, help='number of iterations to train for')
 
     parser.add_argument('--no_reservoir', action='store_true')

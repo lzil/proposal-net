@@ -34,7 +34,7 @@ class Trainer:
         elif self.args.net == 'hypothesis':
             self.net = HypothesisNet(self.args)
 
-        # getting number of elements of every parameter
+        # picks which parameters to train and which not to train
         self.n_params = {}
         self.train_params = []
         self.not_train_params = []
@@ -62,7 +62,7 @@ class Trainer:
         self.potential = get_potential(self.args)
 
         # if using separate training and test sets, separate them out
-        if self.args.separate_test:
+        if not self.args.same_test:
             np.random.shuffle(self.dset)
             cutoff = round(.9 * len(self.dset))
             self.train_set = self.dset[:cutoff]
@@ -82,179 +82,6 @@ class Trainer:
             self.writer.writerow(['ix', 'avg_loss'])
             self.plot_checkpoint_path = os.path.join(self.log.run_dir, f'checkpoints_{self.run_id}.pkl')
             self.save_model_path = os.path.join(self.log.run_dir, f'model_{self.run_id}.pth')
-
-    def optimize_lbfgs(self, mode):
-        if mode == 'pytorch':
-            # don't use this. need to fix first if used
-            best_loss = float('inf')
-            best_loss_params = None
-            for i in range(50):
-                # just optimized based on a random 500 samples
-                # don't do this!
-                np.random.shuffle(self.dset)
-                dset = np.asarray([x[:-1] for x in self.dset[:500]])
-                x = torch.from_numpy(dset[:,0,:]).float()
-                y = torch.from_numpy(dset[:,1,:]).float()
-
-                def closure():
-                    self.net.reset()
-                    self.optimizer.zero_grad()
-                    total_loss = torch.tensor(0.)
-                    for j in range(x.shape[1]):
-                        net_in = x[:,j]
-                        net_out, val_res, val_thal = self.net(net_in)
-                        net_target = y[:,j].reshape(-1, 1)
-
-                        step_loss = self.criterion(net_out, net_target)
-                        total_loss += step_loss
-
-                    total_loss.backward()
-                    return total_loss
-
-                self.optimizer.step(closure)
-                loss = closure()
-                
-                if loss < best_loss:
-                    print(i, loss.item(), 'new best loss')
-                    best_loss = loss
-                    best_loss_params = self.net.state_dict()
-                else:
-                    print(i, loss.item(), 'nope')
-                    self.net.load_state_dict(best_loss_params)
-
-        elif mode == 'scipy':
-
-            if self.args.dset_type == 'goals':
-                targets = torch.Tensor(self.dset)
-            else:
-                dset = np.asarray([x[:-1] for x in self.dset])
-                x = torch.from_numpy(dset[:,0,:]).float()
-                y = torch.from_numpy(dset[:,1,:]).float()
-
-            # so that the callback for scipy.optimize.minimize knows what step it is on
-            self.scipy_ix = 0
-            vis_samples = []
-
-            # this is what happens every iteration
-            # run through all examples (x, y) and get loss, gradient
-            def closure(v):
-
-                # setting the parameters in the network with the new values in v
-                ind = 0
-                for k,nums in self.n_params.items():
-                    # nums[0] is shape, nums[1] is number of elements
-                    weight = v[ind:ind+nums[1]].reshape(nums[0])
-                    self.net.state_dict()[k][:] = torch.Tensor(weight)
-                    ind += nums[1]
-
-                # need to do this so that burn in works
-                # res state starting from same random seed for each iteration
-                self.net.reset(res_state_seed=0)
-                self.net.zero_grad()
-                total_loss = torch.tensor(0.)
-
-                # running through the dataset and getting gradients
-                if self.args.dset_type == 'goals':
-                    n_pts = len(self.dset[0])
-                    cur_indices = [0 for i in range(len(self.dset))]
-                    for j in range(self.args.goals_timesteps):
-                        net_in = targets[torch.arange(len(self.dset)),cur_indices,:]
-                        net_out, step_loss, extras = self.run_iteration(net_in, net_in)
-                        ins.append(net_in.numpy())
-                        outs.append(net_out.detach().squeeze().numpy())
-                        cur_indices = update_goal_indices(targets, cur_indices, extras[-1])
-
-                else:
-                    for j in range(x.shape[1]):
-                        net_out, step_loss, _ = self.run_iteration(x[:,j], y[:,j])
-                
-                total_loss += step_loss
-                total_loss.backward()
-
-                # need to do this every time so we can reference parameters and grads by name
-                grad_list = []
-                for k,v in self.net.named_parameters():
-                    for part in self.args.train_parts:
-                        if part in k:
-                            grad = v.grad.numpy().reshape(-1)
-                            grad_list.append(grad)
-                            break
-
-                vec = np.concatenate(grad_list)
-                post = np.float64(vec)
-
-                return total_loss.item(), post
-
-            # callback just does logging
-            def callback(xk):
-                if self.args.no_log:
-                    return
-                self.scipy_ix += 1
-                if self.scipy_ix % self.log_interval == 0:
-                    # W_f, W_ro = vec_to_param(xk)
-                    sample_n = random.randrange(len(self.dset))
-
-                    with torch.no_grad():
-                        self.net.reset(res_state_seed=0)
-                        self.net.zero_grad()
-                        outs = []
-                        total_loss = torch.tensor(0.)
-
-                        if self.args.dset_type == 'goals':
-                            done = []
-                            ins = []
-                            n_pts = len(self.dset[0])
-                            cur_index = 0
-                            for j in range(self.args.goals_timesteps):
-                                net_in = targets[sample_n,cur_index,:]
-                                net_out, step_loss, extras = self.run_iteration(net_in, net_in)
-                                ins.append(net_in.numpy())
-                                outs.append(net_out.detach().squeeze().numpy())
-                                cur_index = update_goal_indices(x, cur_index, extras[-1])
-                                total_loss += step_loss
-                            pdb.set_trace()
-                            self.log_checkpoint(self.scipy_ix, np.array(ins), np.array(ins), np.array(outs), total_loss.item(), total_loss.item())
-
-                        else:
-                            xs = x[sample_n,:]
-                            ys = y[sample_n,:]
-                            for j in range(xs.shape[0]):
-                                net_out, step_loss, _ = self.run_iteration(xs[j], ys[j])
-                                outs.append(net_out.item())
-                                total_loss += step_loss
-
-                            z = np.stack(outs).squeeze()
-                            self.log_checkpoint(self.scipy_ix, xs.numpy(), ys.numpy(), z, total_loss.item(), total_loss.item())
-
-                        logging.info(f'iteration {self.scipy_ix}\t| loss {total_loss.item():.3f}')
-
-            # getting the initial values to put into the algorithm
-            init_list = []
-            for k,_ in self.n_params.items():
-                init = self.net.state_dict()[k].numpy().reshape(-1)
-                init_list.append(init)
-
-            init = np.concatenate(init_list)
-            optim_options = {
-                'iprint': self.log_interval,
-                'maxiter': self.args.maxiter,
-                'ftol': 1e-12
-            }
-            optim = minimize(closure, init, method='L-BFGS-B', jac=True, callback=callback, options=optim_options)
-
-            # W_f_final, W_ro_final = vec_to_param(optim.x)
-            error_final = optim.fun
-            n_iters = optim.nit
-            # error_final = self.test()
-            
-
-            if not self.args.no_log:
-                self.log_model(ix='final')
-                with open(os.path.join(self.log.run_dir, f'checkpoints_{self.run_id}.pkl'), 'wb') as f:
-                    pickle.dump(self.vis_samples, f)
-                self.csv_path.close()
-
-            return error_final, n_iters
 
     def log_model(self, ix=0):
         # saving all checkpoints takes too much space so we just save one model at a time, unless we explicitly specify it
@@ -342,8 +169,10 @@ class Trainer:
         # the target is actually the input
         step_loss, new_indices = goals_loss(net_out, x, indices, self.potential, threshold=self.args.goals_threshold)
         # it'll be None if we just started, or if we're not doing variational stuff
-        if extras['kl'] is not None:
+        if 'kl' in extras and extras['kl'] is not None:
             step_loss += sum(extras['kl'])
+        if 'lconf' in extras and extras['lconf'] is not None:
+            step_loss += sum(extras['lconf'])
         # hacky way to append the net_in
         extras.update({'in': net_in})
 
@@ -414,9 +243,6 @@ class Trainer:
                     ending = True
                     break
 
-                if ix > 300:
-                    self.net.switch = False
-
                 running_loss += loss.item()
                 # mag = max([torch.max(torch.abs(p.grad)) for p in self.train_params])
                 # running_mag += mag             
@@ -440,11 +266,11 @@ class Trainer:
                         avg_index = test_etc['indices'].float().mean().item()
                         log_arr.append(f'avg index {avg_index:.3f}')
                     if self.args.net == 'hypothesis':
-                        ha = self.net.hyp_approval.get_input()
-                        sa = self.net.sim_approval.get_input()
-                        conf = self.net.confidence.get_input()
+                        ha = self.net.log_h_yes.get_input()
+                        # sa = self.net.log_s_yes.get_input()
+                        conf = self.net.log_conf.get_input()
                         log_arr.append(f'hyp_app {ha:.3f}')
-                        log_arr.append(f'sim_app {sa:.3f}')
+                        # log_arr.append(f'sim_app {sa:.3f}')
                         log_arr.append(f'conf {conf:.3f}')
                     log_str = '\t| '.join(log_arr)
                     logging.info(log_str)
@@ -495,9 +321,12 @@ def parse_args():
 
     parser.add_argument('-H', type=int, default=3, help='hypothesizer hidden dimension')
 
-    parser.add_argument('--net', type=str, default='basic', choices=['basic', 'state', 'hypothesis'])
+    parser.add_argument('--net', type=str, default='hypothesis', choices=['basic', 'state', 'hypothesis'])
     parser.add_argument('--h_type', type=str, default='variational', choices=['ff', 'variational'])
     parser.add_argument('--s_type', type=str, default='ff', choices=['ff', 'recurrent'])
+
+    parser.add_argument('-d', '--dataset', type=str, default='datasets/goals_2d_1.pkl')
+    parser.add_argument('--same_test', action='store_true', help='use same set for test/train')
 
     parser.add_argument('--train_parts', type=str, nargs='+', default=[''])
     parser.add_argument('--stride', type=int, default=1, help='stride of the W_f')
@@ -531,13 +360,10 @@ def parse_args():
     parser.add_argument('--latent_decay', type=float, default=.8, help='proportion to keep from the last state')
     parser.add_argument('--r_latency', type=int, default=1, help='how many operation steps it takes to move one step')
     # parser.add_argument('--r_input_decay', type=float, default=1, help='decay of res input for each step w/o input')
-    parser.add_argument('--h_latency', type=int, default=3, help='how many operation steps it takes to move one step')
-    parser.add_argument('--s_latency', type=int, default=3, help='how many operation steps it takes to move one step')
+    parser.add_argument('--h_latency', type=int, default=5, help='how many operation steps it takes to move one step')
+    parser.add_argument('--s_latency', type=int, default=2, help='how many operation steps it takes to move one step')
     
-    parser.add_argument('--out_act', type=str, default='none', help='output activation')
-
-    parser.add_argument('-d', '--dataset', type=str, default='datasets/goals_2d_1.pkl')
-    parser.add_argument('--separate_test', action='store_true', help='use separate test set')
+    parser.add_argument('--out_act', type=str, default='none', help='output activation')    
 
     # goals parameters
     parser.add_argument('--goals_timesteps', type=int, default=200, help='num timesteps to run seq goals dataset for')
