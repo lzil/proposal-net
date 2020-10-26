@@ -9,6 +9,9 @@ import random
 
 import potentials
 
+
+### RETRIEVAL
+
 def get_optimizer(args, train_params):
     op = None
     if args.optimizer == 'adam':
@@ -52,6 +55,7 @@ def get_potential(args):
         p = potentials.central_bump
     return p
 
+### LOSSES
 
 # loss function for sequential goals
 def goals_loss(out, targets, indices, p_fn, threshold=1, update=True):
@@ -80,10 +84,18 @@ def loss_confidence(conf, labels):
     loss = loss + 5 * labels.long() * loss
     return loss
 
+# loss of the simulator in guessing target distance
+def loss_simulator(out, target):
+    return 5 * nn.MSELoss()(out, target)
+
+
 # updating indices array to get the next targets for sequential goals
 def update_goal_indices(targets, indices, done):
     indices = torch.clamp(indices + done, 0, len(targets[0]) - 1)
     return indices
+
+
+### DATA PROCESSING
 
 # given batch and dset name, get the x, y pairs and turn them into Tensors
 def get_x_y(batch, dset):

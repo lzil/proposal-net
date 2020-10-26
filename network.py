@@ -11,7 +11,7 @@ import copy
 import sys
 
 from utils import Bunch, load_rb, fill_undefined_args
-from helpers import get_output_activation, loss_confidence
+from helpers import get_output_activation, loss_confidence, loss_simulator
 
 DEFAULT_ARGS = {
     'L': 2,
@@ -27,7 +27,6 @@ DEFAULT_ARGS = {
     'bias': True,
     'network_delay': 0,
     'out_act': 'none',
-    'stride': 1,
     'model_path': None,
 
     'h_type': 'variational',
@@ -37,6 +36,7 @@ DEFAULT_ARGS = {
     'r_latency': 1,
     's_latency': 10,
     'h_latency': 10,
+    's_steps': 5,
 
     'res_path': None,
     'sim_path': None
@@ -48,7 +48,7 @@ class Reservoir(nn.Module):
         super().__init__()
         self.args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
 
-        if not hasattr(args, 'res_seed'):
+        if not hasattr(self.args, 'res_seed'):
             self.args.res_seed = random.randrange(1e6)
         if not hasattr(self.args, 'res_x_seed'):
             self.args.res_x_seed = np.random.randint(1e6)
@@ -101,7 +101,13 @@ class Reservoir(nn.Module):
             # load specified hidden state from seed
             res_state = self.x_seed
 
-        if res_state == 'zero' or res_state == -1:
+        if type(res_state) is np.ndarray:
+            # load an actual particular hidden state
+            # if there's an error here then highly possible that res_state has wrong form
+            self.x = torch.as_tensor(res_state).float()
+        elif type(res_state) is torch.Tensor:
+            self.x = res_state
+        elif res_state == 'zero' or res_state == -1:
             # reset to 0
             self.x = torch.zeros((1, self.args.N))
         elif res_state == 'random' or res_state == -2:
@@ -114,9 +120,8 @@ class Reservoir(nn.Module):
             self.x = torch.normal(0, 1, (1, self.args.N))
             torch.set_rng_state(rng_pt)
         else:
-            # load an actual particular hidden state
-            # if there's an error here then highly possible that res_state has wrong form
-            self.x = torch.from_numpy(res_state).float()
+            print('not any of these types, something went wrong')
+            pdb.set_trace()
 
         if burn_in:
             self.burn_in(self.args.res_burn_steps)
@@ -170,7 +175,7 @@ class BasicNetwork(nn.Module):
         if not extras:
             return z
         elif self.args.use_reservoir:
-            return z, {'x': x, 'u': u}
+            return z, {'x': self.x, 'u': u}
         else:
             return z, {'u': u}
 
@@ -191,17 +196,15 @@ class Simulator(nn.Module):
         args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
         super().__init__()
         self.args = args
-        
-        self._init_vars()
-        if args.sim_path is not None:
-            self.load_state_dict(torch.load(args.sim_path))
 
-    def _init_vars(self):
         self.W_sim = nn.Sequential(
             nn.Linear(self.args.L + self.args.D, 16, bias=self.args.bias),
             nn.Tanh(),
             nn.Linear(16, self.args.L, bias=self.args.bias)
         )
+
+        if args.sim_path is not None:
+            self.load_state_dict(torch.load(args.sim_path))
 
     def forward(self, s, p):
         # in case we're working with a batch of unknown size
@@ -345,6 +348,7 @@ class VariationalHypothesizer(nn.Module):
         super().__init__()
         self.args = args
         self.sample_std = .5
+        self.args.n_props = 5
 
         # 2x size hidden layer for mean and logvar
         self.encoder = nn.Sequential(
@@ -369,23 +373,55 @@ class VariationalHypothesizer(nn.Module):
         lvar = h[:,self.args.H:]
         # reparameterization
         std = torch.exp(0.5 * lvar)
-        eps = torch.randn_like(std)
-        z = eps * std + mu
-        # confidence
-        lprobs = torch.distributions.normal.Normal(mu, std).log_prob(z)
-        z_lprobs = torch.cat([z, lprobs], dim=-1)
-        # conf = self.confider(lprobs)
+
+        distro = torch.distributions.normal.Normal(mu, std)
+
+        zs = []
+        rands = []
+        while(len(zs) < self.args.n_props):
+            # generating the proposal
+            eps = torch.randn_like(std)
+            z = eps * std + mu
+            # calc stats for previous z's and lprobs for network input
+            cdfs = distro.cdf(z)
+            lprobs = distro.log_prob(z)
+            z_lprobs = torch.cat([z, lprobs], dim=-1)
+            # test to see if it's too close to any previous z's
+            is_valid = True
+            for j in zs:
+                # check if within 10% of all dimensions
+                diffs = torch.abs(cdfs - j[1])
+                is_valid = torch.all(diffs - 0.05 > 0)
+                if not is_valid:
+                    break
+
+            if is_valid:
+                zs.append([torch.cat([z, lprobs], dim=-1), cdfs])
+
+        # don't bother with the cdfs
+        zs = [z[0] for z in zs]
+
         # decoding
+        prop_arr = []
+        extras_arr = []
+        for i in range(self.args.n_props):
 
-        prop_conf = self.decoder(z_lprobs)
-        prop = 10 * torch.tanh(prop_conf[:,:-1])
-        # prop = prop_conf[:,:-1]
-        conf = torch.sigmoid(prop_conf[:,-1])
-        # conf = torch.sigmoid(-torch.max(h[:,self.args.H:], dim=-1)[0])
-        # calc KL for loss
-        kl = -0.5 * torch.sum(1 + lvar - mu ** 2 - lvar.exp(), dim=1)
+            prop_conf = self.decoder(z_lprobs)
+            prop = 10 * torch.tanh(prop_conf[:,:-1])
+            # prop = prop_conf[:,:-1]
+            conf = torch.sigmoid(prop_conf[:,-1])
+            # conf = torch.sigmoid(-torch.max(h[:,self.args.H:], dim=-1)[0])
+            # calc KL for loss
+            kl = -0.5 * torch.sum(1 + lvar - mu ** 2 - lvar.exp(), dim=1)
 
-        return prop, kl, conf
+            extras = {
+                'conf': conf,
+                'kl': kl
+            }
+            prop_arr.append(prop)
+            extras_arr.append(extras)
+
+        return prop_arr, extras_arr
 
 class FFHypothesizer(nn.Module):
     def __init__(self, args):
@@ -448,15 +484,15 @@ class StateNet(nn.Module):
         t = self._adj_input_dim(t)
 
         if self.cur_h is None:
-            prop, kl, conf = self.hypothesizer(self.s, t)
-            self.cur_h = [prop, kl, conf]
+            prop, extras = self.hypothesizer(self.s, t)
+            self.cur_h = prop, extras['kl']
 
         h_done = self.latent.step()
         if h_done:
             self.p = self.cur_h
             self.cur_h = None
 
-        prop, kl, conf = self.p
+        prop, kl = self.p
         if self.args.use_reservoir:
             z = self.reservoir(prop)
         else:
@@ -465,7 +501,7 @@ class StateNet(nn.Module):
         z = torch.clamp(z, -2, 2)
         self.s = self.s + z
         if extras:
-            return self.s, {'z': z, 'kl': kl, 'prop': prop}
+            return self.s, {'z': z, 'kl': sum(kl), 'prop': prop}
         return self.s
 
     def reset(self, res_state=None):
@@ -548,36 +584,41 @@ class HypothesisNet(nn.Module):
         if self.s is None:
             self._init_states(t)
         t = self._adj_input_dim(t)
-        # do everything one by one
 
         lconf = []
+        lsim = []
 
         for i in range(len(t)):
+            # simulator loss comes first so we can replace it in time later
+            self.old_s_prop_idx[i] = (self.old_s_prop_idx[i] + 1) % self.args.s_steps
+            old_s = self.old_s_prop[i][self.old_s_prop_idx[i]]
+            if old_s is not None:
+                lsim.append(loss_simulator(self.s[i], old_s[0]))
+                self.old_s_prop[i][self.old_s_prop_idx[i]] = None
+
             cur_s = self.s[i].unsqueeze(0)
             cur_t = t[i].unsqueeze(0)
             self.h_latent[i].add_input(cur_s, cur_t)
 
             if self.c[i] == 'h':
-                # print('h step')
                 if self.cur_h[i] is None:
                     
                     inp = self.h_latent[i].get_input()
                     # using very current data
-                    # pdb.set_trace()
-                    self.cur_h[i] = self.hypothesizer(cur_s, cur_t)
+                    prop, extras = self.hypothesizer(cur_s, cur_t)
+                    self.cur_h[i] = prop, extras['kl'][0], extras['conf'][0]
                     # using latent data
                     # self.cur_h[i] = self.hypothesizer(*inp)
 
-                    # print('h generated, put in self.cur_h')
                     # old simulation doesn't matter cus we now got a new hypothesis
                     self.cur_s[i] = None
+                    # IMPORTANT
+                    self.p[i] = [0 * j for j in self.p[i]]
 
                 # did our hypothesis finish computing?
                 h_done = self.h_latent[i].step()
                 if h_done:
-                    # print('h done')
                     prop, kl, conf = self.cur_h[i]
-                    conf = conf[0]
                     # 1 if we are confident, 0 if not and want to use simulator
                     if conf is None:
                         conf = torch.tensor(1.)
@@ -591,55 +632,42 @@ class HypothesisNet(nn.Module):
                     else:
                         self.log_h_yes.add_input(1)
                         self.p[i] = self.cur_h[i]
-                        # print('h accepted, put in self.p')
                         self.cur_h[i] = None
-
-                        # the cheating part where we check if it worked anyway
-
-                        # lconf.append(10 * loss_confidence(self.cur_h[i][2][0], self.cur_s[i]))
 
                 else:
                     # it didn't finish computing yet, so nothing's gonna happen
                     pass
 
             elif self.c[i] == 's':
-                # print('s step')
                 cur_s = self.s[i].unsqueeze(0)
                 # p doesn't need to be unsqueezed cus it's in a list already
-                cur_h = self.cur_h[i][0]
+                cur_prop = self.cur_h[i][0]
 
                 # there's nothing in the current s so we gon process something
                 if self.cur_s[i] is None:
-                    # print('s tested')
                     if self.switch:
                         self.cur_s[i] = True
                     else:
-                        # print('simulating hypothesis')
-                        pred_prop = self.simulator(cur_s, cur_h)
+                        pred_prop = self.simulator(cur_s, cur_prop)
                         pred_cur = self.simulator(cur_s, self.p[i][0])
-                        # self.cur_s[i] = True#TRUE OR FALSE WHICH IS SOME COMPARISON
                         
                         dist_prop = torch.norm(t[i] - pred_prop[0])
                         dist_cur = torch.norm(t[i] - pred_cur[0])
-                        # pdb.set_trace()
                         self.cur_s[i] = dist_prop < dist_cur
 
                 s_done = self.s_latent[i].step()
                 if s_done:
-                    # print('s done')
                     # confidence loss
-                    lconf.append(10 * loss_confidence(self.cur_h[i][2][0], self.cur_s[i]))
+                    lconf.append(10 * loss_confidence(self.cur_h[i][2], self.cur_s[i]))
                     if self.cur_s[i]:
                         self.log_s_yes.add_input(1)
-                        # print('hypothesis worked')
+                        self.old_s_prop[i][self.old_s_prop_idx[i]] = pred_prop
                         # yay! it worked
                         self.p[i] = self.cur_h[i]
                         self.cur_s[i] = None
-                        # print('s approved, put self.cur_h into self.p')
                     else:
                         self.log_s_yes.add_input(0)
-                        # print('s failed')
-                        # print('hypothesis failed')
+                        self.old_s_prop[i][self.old_s_prop_idx[i]] = pred_cur
                         # oh no it failed, hypothesize something else
                         # TODO: tell hypothesizer the old failure
                         pass
@@ -648,7 +676,7 @@ class HypothesisNet(nn.Module):
                     self.c[i] = 'h'
 
         p = torch.cat([p[0] for p in self.p])
-        kl = [p[1][0] for p in self.p]
+        kl = [p[1] for p in self.p]
 
         if self.args.use_reservoir:
             z = self.reservoir(p)
@@ -656,54 +684,10 @@ class HypothesisNet(nn.Module):
             z = self.W_ro(p)
         z = torch.clamp(z, -2, 2)
         self.s = self.s + z
-        # ha = self.log_h_yes.get_input(clear=False)
-        # sa = self.log_s_yes.get_input(clear=False)
+
         if extras:
-            return self.s, {'z': z, 'kl': kl, 'prop': p, 'lconf': lconf}
+            return self.s, {'z': z, 'prop': p, 'kl': sum(kl), 'lconf': sum(lconf), 'lsim': sum(lsim)}
         return self.s
-
-
-        # fail_count = 0
-        # while True:
-        #     prop, kld = self.hypothesizer(self.s, t)
-        #     sim = self.simulator(self.s, prop)
-
-        #     # test the sim here
-        #     #cos_ang = torch.dot(sim/sim.norm(), t/t.norm())
-        #     cur_dist = torch.norm(t - self.s, dim=-1)
-        #     prop_dist = torch.norm(t - sim, dim=-1)
-
-        #     #dx_ratio = (cur_dist - torch.norm(t - sim)) / cur_dist
-        #     if prop_dist < cur_dist:
-        #         break
-
-        #     # if cos_ang * dx_ratio >= 1:
-        #     #     break
-        #     fail_count += 1
-        #     print('failed', cur_dist.item(), prop_dist.item())
-        #     if fail_count >= 100:
-        #         print('really failed here')
-        #         pdb.set_trace()
-
-        # print('succeeded')
-        # pdb.set_trace()
-        # u = prop
-
-        # x = self.reservoir(u)
-
-        # z = self.W_ro(x)
-        # pdb.set_trace()
-        # fn = get_output_activation(self.args)
-        # z = fn(z)
-        # #z = nn.ReLU()(z)
-        # if self.network_delay == 0:
-        #     return z, x, u
-        # else:
-        #     z2 = self.delay_output[self.delay_ind]
-        #     self.delay_output[self.delay_ind] = z
-        #     self.delay_ind = (self.delay_ind + 1) % self.network_delay
-        #     return z2, x, u
-
 
     def reset(self, res_state=None):
         if self.args.use_reservoir:
@@ -722,11 +706,13 @@ class HypothesisNet(nn.Module):
 
         self.s = torch.zeros(bs, self.args.Z) # the current state
         self.c = ['h'] * bs # whether we're currently on H or S mode
-        self.p = [[torch.zeros(1, self.args.D), torch.zeros(1)] for i in range(bs)] # the current proposal (to output)
+        self.p = [[torch.zeros(1, self.args.D), torch.tensor(0.), torch.tensor(0.)] for i in range(bs)] # the current proposal (to output)
         self.cur_h = [None] * bs # the current hypothesis (to process via S)
         self.cur_s = [None] * bs # whether we've approved the current hypothesis
-        self.h_latent = [Latent(self.args.h_latency, self.args.latent_decay) for i in range(bs)]
-        self.s_latent = [Latent(self.args.s_latency, self.args.latent_decay) for i in range(bs)]
+        self.h_latent = [Latent(self.args.h_latency, self.args.latent_decay) for i in range(bs)] # h inputs
+        self.s_latent = [Latent(self.args.s_latency, self.args.latent_decay) for i in range(bs)] # s inputs
+        self.old_s_prop = [[None] * self.args.s_steps] * bs
+        self.old_s_prop_idx = [0] * bs
 
     def _adj_input_dim(self, t):
         if len(t.shape) == 2:

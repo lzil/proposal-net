@@ -116,14 +116,22 @@ class Trainer:
         # outs is output of network
         if self.args.dset_type == 'goals':
             ins = []
+            l_other = {'kl': 0, 'lconf': 0, 'lsim': 0}
             targets = x
             cur_idx = torch.zeros(x.shape[0], dtype=torch.long)
             for j in range(self.args.goals_timesteps):
-                net_out, step_loss, extras, cur_idx = self.run_iter_goal(x, cur_idx)
+                net_out, step_loss, cur_idx, extras = self.run_iter_goal(x, cur_idx)
                 # what we need to record for logging
                 ins.append(extras['in'])
                 outs.append(net_out[-1].detach().numpy())
                 total_loss += step_loss
+
+                if 'kl' in extras and extras['kl'] is not None:
+                    l_other['kl'] += extras['kl']
+                if 'lconf' in extras and extras['lconf'] is not None:
+                    l_other['lconf'] += extras['lconf']
+                if 'lsim' in extras and extras['lsim'] is not None:
+                    l_other['lsim'] += extras['lsim']
 
             ins = torch.cat(ins)
 
@@ -144,8 +152,9 @@ class Trainer:
             'ins': ins,
             'targets': targets,
             'outs': outs,
-            'prop': extras['prop']
+            'prop': extras['prop'],
         }
+        etc.update(l_other)
         if self.args.dset_type == 'goals':
             etc['indices'] = cur_idx
 
@@ -170,13 +179,15 @@ class Trainer:
         step_loss, new_indices = goals_loss(net_out, x, indices, self.potential, threshold=self.args.goals_threshold)
         # it'll be None if we just started, or if we're not doing variational stuff
         if 'kl' in extras and extras['kl'] is not None:
-            step_loss += sum(extras['kl'])
+            step_loss += extras['kl']
         if 'lconf' in extras and extras['lconf'] is not None:
-            step_loss += sum(extras['lconf'])
+            step_loss += extras['lconf']
+        if 'lsim' in extras and extras['lsim'] is not None:
+            step_loss += extras['lsim']
         # hacky way to append the net_in
         extras.update({'in': net_in})
 
-        return net_out, step_loss, extras, new_indices
+        return net_out, step_loss, new_indices, extras
 
     def test(self, n=0):
         if n != 0:
@@ -194,7 +205,7 @@ class Trainer:
             if self.args.dset_type == 'goals':
                 cur_idx = torch.zeros(x.shape[0], dtype=torch.long)
                 for j in range(self.args.goals_timesteps):
-                    _, step_loss, _, cur_idx = self.run_iter_goal(x, cur_idx)
+                    _, step_loss, cur_idx, _ = self.run_iter_goal(x, cur_idx)
                     total_loss += step_loss
 
             else:
@@ -267,11 +278,15 @@ class Trainer:
                         log_arr.append(f'avg index {avg_index:.3f}')
                     if self.args.net == 'hypothesis':
                         ha = self.net.log_h_yes.get_input()
-                        # sa = self.net.log_s_yes.get_input()
+                        sa = self.net.log_s_yes.get_input()
                         conf = self.net.log_conf.get_input()
+                        lconf, lsim, kl = etc['lconf'], etc['lsim'], etc['kl']
                         log_arr.append(f'hyp_app {ha:.3f}')
-                        # log_arr.append(f'sim_app {sa:.3f}')
+                        log_arr.append(f'sim_app {sa:.3f}')
                         log_arr.append(f'conf {conf:.3f}')
+                        log_arr.append(f'lconf {lconf:.3f}')
+                        log_arr.append(f'lsim {lsim:.3f}')
+                        log_arr.append(f'kl {kl:.3f}')
                     log_str = '\t| '.join(log_arr)
                     logging.info(log_str)
 
@@ -327,9 +342,7 @@ def parse_args():
 
     parser.add_argument('-d', '--dataset', type=str, default='datasets/goals_2d_1.pkl')
     parser.add_argument('--same_test', action='store_true', help='use same set for test/train')
-
     parser.add_argument('--train_parts', type=str, nargs='+', default=[''])
-    parser.add_argument('--stride', type=int, default=1, help='stride of the W_f')
     
     # make sure model_config path is specified if you use any paths! it ensures correct dimensions, bias, etc.
     # parser.add_argument('--model_config_path', type=str, default=None, help='config path corresponding to model load path')
@@ -362,6 +375,7 @@ def parse_args():
     # parser.add_argument('--r_input_decay', type=float, default=1, help='decay of res input for each step w/o input')
     parser.add_argument('--h_latency', type=int, default=5, help='how many operation steps it takes to move one step')
     parser.add_argument('--s_latency', type=int, default=2, help='how many operation steps it takes to move one step')
+    parser.add_argument('--s_steps', type=int, default=5, help='number of forward steps to predict for s')
     
     parser.add_argument('--out_act', type=str, default='none', help='output activation')    
 
