@@ -67,19 +67,25 @@ from network import Reservoir, HypothesisNet
 def main(args):
 
     batch_size = 12
-    n_steps = 15
+    n_steps = 80
+
+    args.res_init_std = 1.5
+
+    args.D = 1
 
     net = HypothesisNet(args)
 
     reservoir = net.reservoir
-    reservoir.reset(np.random.normal(0, 1, (batch_size, net.args.N)))
+    reservoir.reset(np.random.normal(0, 1, (1, net.args.N)))
+    # reservoir.reset(np.random.normal(0, 1, (batch_size, net.args.N)))
     # reservoir.reset('zero')
     # reservoir.W_ro.bias.data = reservoir.W_ro.bias.data
 
     # torch.manual_seed(0)
     # np.random.seed(0)
 
-    prop = torch.Tensor(np.tile(np.random.normal(0, 10, size=(1, net.args.D)), (batch_size, 1))) * 0
+    # prop = torch.Tensor(np.tile(np.random.normal(0, 10, size=(1, net.args.D)), (batch_size, 1))) # same input to all 12
+    prop = torch.Tensor(np.tile(np.random.normal(0, 1, size=(batch_size, net.args.D)), (1, 1))) # distinct input to all 12
     prop2 = torch.Tensor(np.tile(np.random.normal(0, 10, size=(1, net.args.D)), (batch_size, 1))) * 0
     init_state = torch.Tensor(np.zeros((batch_size, net.args.L)))
 
@@ -112,6 +118,8 @@ def main(args):
 
         ax.scatter(states[i][0], states[i][1], color='coral', alpha=0.5, lw=1)
         # ax.plot(states[i][, outs[i], color='cornflowerblue', alpha=1, lw=1.5, label='out')
+        ax.set_xlim([-30,30])
+        ax.set_ylim([-30,30])
 
         ax.tick_params(axis='both', color='white')
 
