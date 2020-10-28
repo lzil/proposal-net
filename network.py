@@ -40,8 +40,6 @@ DEFAULT_ARGS = {
 
     'res_path': None,
     'sim_path': None,
-
-    'losses': ['sim', 'conf', 'fprop']
 }
 
 # reservoir network. shouldn't be trained
