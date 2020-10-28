@@ -84,7 +84,6 @@ class Reservoir(nn.Module):
     # extras currently doesn't do anything. maybe add x val, etc.
     def forward(self, u, extras=False):
         g = torch.tanh(self.J(self.x) + self.W_u(u))
-        pdb.set_trace()
         # adding any inherent reservoir noise
         if self.noise_std > 0:
             gn = g + torch.normal(torch.zeros_like(g), self.noise_std)
@@ -319,37 +318,15 @@ class RecurrentSimulator(nn.Module):
         if burn_in:
             self.burn_in(self.n_burn_in)
 
-class MemorySimulator(nn.Module):
-    def __init__(self, args=DEFAULT_ARGS):
-        args = fill_undefined_args(args, DEFAULT_ARGS, to_bunch=True)
-        super().__init__()
-        self.args = args
-
-        if not hasattr(self.args, 'sim_x_seed'):
-            self.args.sim_x_seed = np.random.randint(1e6)
-
-        self.x_seed = self.args.sim_x_seed
-        self.activation = torch.tanh
-        self.tau_x = 10
-
-        # weights in the recurrent net
-        self.J = nn.Linear(self.args.N_sim, self.args.N_sim, bias=False)
-        self.S_u = nn.Linear(self.args.L + self.args.D, self.args.N_sim, bias=False)
-        self.S_ro = nn.Linear(self.args.N_sim, self.args.L)
-
-        # dealing with latent output
-        self.latency = self.args.sim_latency
-        self.latent_idx = -1
-        self.latent_arr = [None] * self.latency
-        self.latent_decay = self.args.latent_decay
-        self.latent_out = 0
-
 class VariationalHypothesizer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         self.sample_std = .5
-        self.args.n_props = 5
+        # number of proposals to make
+        self.n_props = 3
+        # how far apart proposals have to be in at least one dimension
+        self.props_threshold = 0.1
 
         # 2x size hidden layer for mean and logvar
         self.encoder = nn.Sequential(
@@ -379,7 +356,7 @@ class VariationalHypothesizer(nn.Module):
 
         zs = []
         rands = []
-        while(len(zs) < self.args.n_props):
+        while(len(zs) < self.n_props):
             # generating the proposal
             eps = torch.randn_like(std)
             z = eps * std + mu
@@ -392,7 +369,7 @@ class VariationalHypothesizer(nn.Module):
             for j in zs:
                 # check if within 10% of all dimensions
                 diffs = torch.abs(cdfs - j[1])
-                is_valid = torch.all(diffs - 0.05 > 0)
+                is_valid = torch.all(diffs - self.props_threshold > 0)
                 if not is_valid:
                     break
 
@@ -405,7 +382,7 @@ class VariationalHypothesizer(nn.Module):
         # decoding
         prop_arr = []
         extras_arr = []
-        for i in range(self.args.n_props):
+        for i in range(self.n_props):
 
             prop_conf = self.decoder(z_lprobs)
             prop = torch.tanh(prop_conf[:,:-1])
@@ -549,6 +526,7 @@ class HypothesisNet(nn.Module):
         self.log_conf = Latent(1, 0.9)
 
         self.switch = False
+        self.fails = 0
 
         self.reset()
 
@@ -590,12 +568,12 @@ class HypothesisNet(nn.Module):
         lsim = []
 
         for i in range(len(t)):
-            # simulator loss comes first so we can replace it in time later
-            self.old_s_prop_idx[i] = (self.old_s_prop_idx[i] + 1) % self.args.s_steps
-            old_s = self.old_s_prop[i][self.old_s_prop_idx[i]]
-            if old_s is not None:
-                lsim.append(loss_simulator(self.s[i], old_s[0]))
-                self.old_s_prop[i][self.old_s_prop_idx[i]] = None
+            # number of predicted steps forward should not be too large (e.g. greater than H time) or this will break
+            if self.old_s[i] is not None:
+                self.old_s[i][0] -= 1
+                if self.old_s[i][0] == 0:
+                    lsim.append(loss_simulator(self.s[i], self.old_s[i][1]))
+                    self.old_s[i] = None
 
             cur_s = self.s[i].unsqueeze(0)
             cur_t = t[i].unsqueeze(0)
@@ -612,7 +590,7 @@ class HypothesisNet(nn.Module):
                     self.cur_h_arr[i] = list(zip(prop_arr, kls, confs))
                     self.cur_h_ind[i] = 0
 
-                    # using latent data
+                    # using lagged data
                     # self.cur_h[i] = self.hypothesizer(*inp)
 
                     # old simulation doesn't matter cus we now got a new hypothesis
@@ -635,7 +613,7 @@ class HypothesisNet(nn.Module):
                         # not confident enough, do a simulation
                         # print('h refused')
                         self.c[i] = 's'
-                        # stop the current movement because we're not really sure what to do next
+                        # stop the current movement (all 0s) because we're not really sure what to do next
                         self.p[i] = [self.p[i][0]*0, 0, 0]
                         self.log_h_yes.add_input(0)
                     else:
@@ -648,7 +626,7 @@ class HypothesisNet(nn.Module):
                     # it didn't finish computing yet, so nothing's gonna happen
                     pass
 
-            # don't use elif so we immediately move to 
+            # don't use elif so we immediately move to simulation
             if self.c[i] == 's':
                 cur_s = self.s[i].unsqueeze(0)
                 # p doesn't need to be unsqueezed cus it's in a list already
@@ -665,23 +643,25 @@ class HypothesisNet(nn.Module):
                         pred_prop = self.simulator(cur_s, cur_prop)
                         # pred_cur = self.simulator(cur_s, self.p[i][0])
                         dist_prop = torch.norm(t[i] - pred_prop[0])
-                        pdb.set_trace()
                         dist_cur = torch.norm(t[i] - cur_s)
                         self.cur_s[i] = dist_prop < dist_cur
+                        self.s_prop[i] = pred_prop
 
                 s_done = self.s_latent[i].step()
                 if s_done:
-                    # confidence loss
+                    # confidence loss compares confidence and whether it was approved or not
                     lconf.append(10 * loss_confidence(self.cur_h[i][2], self.cur_s[i]))
                     if self.cur_s[i]:
                         # it works! go with it
                         self.log_s_yes.add_input(1)
-                        self.old_s_prop[i][self.old_s_prop_idx[i]] = pred_prop
+                        self.old_s[i] = [self.args.s_steps, self.s_prop[i][0]]
                         self.p[i] = self.cur_h[i]
                         self.cur_s[i] = None
+                        self.s_prop[i] = None
                         # we can develop a new hypothesis now
                         self.cur_h[i] = None
                         self.cur_h_arr[i] = None
+
                     else:
                         # didn't work :(
                         self.log_s_yes.add_input(0)
@@ -689,7 +669,11 @@ class HypothesisNet(nn.Module):
 
                         # move on to the next proposal
                         self.cur_h_ind[i] += 1
-                        prop_arr, extras_arr = self.cur_h_arr[i]
+                        # rejected all proposals, try again
+                        if self.cur_h_ind[i] >= len(self.cur_h_arr[i]):
+                            self.cur_h[i] = None
+                            self.cur_h_arr[i] = None
+                            self.fails += 1
                     
                     self.c[i] = 'h'
 
@@ -732,8 +716,8 @@ class HypothesisNet(nn.Module):
         self.cur_h_ind = [0] * bs
         self.h_latent = [Latent(self.args.h_latency, self.args.latent_decay) for i in range(bs)] # h inputs
         self.s_latent = [Latent(self.args.s_latency, self.args.latent_decay) for i in range(bs)] # s inputs
-        self.old_s_prop = [[None] * self.args.s_steps] * bs
-        self.old_s_prop_idx = [0] * bs
+        self.old_s = [None] * bs
+        self.s_prop = [None] * bs
 
     def _adj_input_dim(self, t):
         if len(t.shape) == 2:

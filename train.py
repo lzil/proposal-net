@@ -192,7 +192,8 @@ class Trainer:
     def test(self, n=0):
         if n != 0:
             assert n <= len(self.test_set)
-            batch = np.random.choice(self.test_set, n)
+            batch_idxs = np.random.choice(len(self.test_set), n)
+            batch = [self.test_set[i] for i in batch_idxs]
         else:
             batch = self.test_set
 
@@ -247,7 +248,7 @@ class Trainer:
                 loss, etc = self.train_iteration(x, y)
 
                 if ix_callback is not None:
-                    ix_callback(total_loss, etc)
+                    ix_callback(loss, etc)
 
                 if loss == -1:
                     logging.info(f'iteration {ix}: is nan. ending')
@@ -264,7 +265,7 @@ class Trainer:
                     z = np.stack(outs).squeeze()
                     # avg of the last 50 trials
                     avg_loss = running_loss / self.args.batch_size / self.log_interval
-                    test_loss, test_etc = self.test()
+                    test_loss, test_etc = self.test(n=10)
                     # avg_max_grad = running_mag / self.log_interval
                     log_arr = [
                         f'iteration {ix}',
