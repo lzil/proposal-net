@@ -446,6 +446,7 @@ class StateNet(nn.Module):
     def _init_vars(self):
         if self.args.h_type == 'variational':
             self.hypothesizer = VariationalHypothesizer(self.args)
+            self.hypothesizer.n_props = 1
         elif self.args.h_type == 'ff':
             self.hypothesizer = FFHypothesizer(self.args)
         else:
@@ -462,8 +463,8 @@ class StateNet(nn.Module):
         t = self._adj_input_dim(t)
 
         if self.cur_h is None:
-            prop, extras = self.hypothesizer(self.s, t)
-            self.cur_h = prop, extras['kl']
+            prop_arr, extras_arr = self.hypothesizer(self.s, t)
+            self.cur_h = prop_arr[0], extras_arr[0]['kl']
 
         h_done = self.latent.step()
         if h_done:
@@ -489,6 +490,7 @@ class StateNet(nn.Module):
         self.s = None
         self.p = None
         self.cur_h = None
+        self.latent.reset(-1)
 
     def _init_states(self, t):
         if len(t.shape) == 2:
@@ -640,12 +642,12 @@ class HypothesisNet(nn.Module):
                         # we want to calculate simulator wrt goals loss at some point
                         # instead of just calculating whether we get closer physically
 
-                        pred_prop = self.simulator(cur_s, cur_prop)
+                        s_pred = self.simulator(cur_s, cur_prop)
                         # pred_cur = self.simulator(cur_s, self.p[i][0])
-                        dist_prop = torch.norm(t[i] - pred_prop[0])
+                        dist_prop = torch.norm(t[i] - s_pred[0])
                         dist_cur = torch.norm(t[i] - cur_s)
                         self.cur_s[i] = dist_prop < dist_cur
-                        self.s_prop[i] = pred_prop
+                        self.s_prop[i] = s_pred
 
                 s_done = self.s_latent[i].step()
                 if s_done:
@@ -673,7 +675,6 @@ class HypothesisNet(nn.Module):
                         if self.cur_h_ind[i] >= len(self.cur_h_arr[i]):
                             self.cur_h[i] = None
                             self.cur_h_arr[i] = None
-                            self.fails += 1
                     
                     self.c[i] = 'h'
 
@@ -748,7 +749,7 @@ class Latent:
 
     def step(self):
         self.latent_idx += 1
-        if self.latent_idx == self.latency:
+        if self.latent_idx % self.latency == 0:
             self.latent_idx = 0
             return True
         else:
@@ -791,7 +792,7 @@ class Latent:
 
         return inp
 
-    def reset(self):
-        self.latent_idx = 0
+    def reset(self, idx=0):
+        self.latent_idx = idx
         self.latent_arr = []
 
