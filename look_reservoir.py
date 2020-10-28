@@ -67,7 +67,7 @@ from network import Reservoir, HypothesisNet
 def main(args):
 
     batch_size = 12
-    n_steps = 80
+    n_steps = 10
 
     # args.res_init_std = 1.5
 
@@ -118,8 +118,9 @@ def main(args):
 
         ax.scatter(states[i][0], states[i][1], color='coral', alpha=0.5, lw=1)
         # ax.plot(states[i][, outs[i], color='cornflowerblue', alpha=1, lw=1.5, label='out')
-        ax.set_xlim([-30,30])
-        ax.set_ylim([-30,30])
+        lim = 10
+        ax.set_xlim([-lim,lim])
+        ax.set_ylim([-lim,lim])
 
         ax.tick_params(axis='both', color='white')
 

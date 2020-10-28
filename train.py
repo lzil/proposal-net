@@ -116,7 +116,7 @@ class Trainer:
         # outs is output of network
         if self.args.dset_type == 'goals':
             ins = []
-            l_other = {'kl': 0, 'lconf': 0, 'lsim': 0}
+            l_other = {'kl': 0, 'lconf': 0, 'lsim': 0, 'lfprop': 0}
             targets = x
             cur_idx = torch.zeros(x.shape[0], dtype=torch.long)
             for j in range(self.args.goals_timesteps):
@@ -132,6 +132,8 @@ class Trainer:
                     l_other['lconf'] += extras['lconf']
                 if 'lsim' in extras and extras['lsim'] is not None:
                     l_other['lsim'] += extras['lsim']
+                if 'lfprop' in extras and extras['lfprop'] is not None:
+                    l_other['lfprop'] += extras['lfprop']
 
             ins = torch.cat(ins)
 
@@ -281,12 +283,13 @@ class Trainer:
                         ha = self.net.log_h_yes.get_input()
                         sa = self.net.log_s_yes.get_input()
                         conf = self.net.log_conf.get_input()
-                        lconf, lsim, kl = etc['lconf'], etc['lsim'], etc['kl']
+                        lconf, lsim, kl, lfprop = etc['lconf'], etc['lsim'], etc['kl'], etc['lfprop']
                         log_arr.append(f'hyp_app {ha:.3f}')
                         log_arr.append(f'sim_app {sa:.3f}')
                         log_arr.append(f'conf {conf:.3f}')
                         log_arr.append(f'lconf {lconf:.3f}')
                         log_arr.append(f'lsim {lsim:.3f}')
+                        log_arr.append(f'lfprop {lfprop:.3f}')
                         log_arr.append(f'kl {kl:.3f}')
                     log_str = '\t| '.join(log_arr)
                     logging.info(log_str)

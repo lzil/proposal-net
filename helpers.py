@@ -58,7 +58,7 @@ def get_potential(args):
 ### LOSSES
 
 # loss function for sequential goals
-def goals_loss(out, targets, indices, p_fn, threshold=1, update=True):
+def goals_loss(out, targets, indices, p_fn, threshold=1, update=True, lam_r=2):
     target = targets[torch.arange(targets.shape[0]),indices,:]
     ps = []
     if len(out.shape) > 1:
@@ -74,19 +74,23 @@ def goals_loss(out, targets, indices, p_fn, threshold=1, update=True):
     # update the indices while we're at it
     if update:
         indices = update_goal_indices(targets, indices, done)
-    loss = torch.sum(dists) - 2 * indices.sum() + sum(ps)
+    loss = torch.sum(dists) - lam_r * indices.sum() + sum(ps)
     return loss, indices
 
 # loss function for confidence
 # labels are whether the simulator judged them to be right or wrong
-def loss_confidence(conf, labels):
+def loss_confidence(conf, labels, lam_c=5, lam_w=10):
     loss = torch.square(conf - labels.long())
-    loss = loss + 5 * labels.long() * loss
+    # give higher weight to those in which confidence is well-placed
+    loss = lam_w * loss * (1 + lam_c * labels.long())
     return loss
 
 # loss of the simulator in guessing target distance
-def loss_simulator(out, target):
-    return 5 * nn.MSELoss()(out, target)
+def loss_simulator(out, target, lam_w=5):
+    return lam_w * nn.MSELoss()(out, target)
+
+def loss_failed_prop(d_cur, d_prop, lam_w=1):
+    return lam_w * nn.MSELoss()(d_cur, d_prop)
 
 
 # updating indices array to get the next targets for sequential goals

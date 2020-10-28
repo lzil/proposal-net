@@ -11,7 +11,7 @@ import copy
 import sys
 
 from utils import Bunch, load_rb, fill_undefined_args
-from helpers import get_output_activation, loss_confidence, loss_simulator
+from helpers import get_output_activation, loss_confidence, loss_simulator, loss_failed_prop
 
 DEFAULT_ARGS = {
     'L': 2,
@@ -39,7 +39,9 @@ DEFAULT_ARGS = {
     's_steps': 5,
 
     'res_path': None,
-    'sim_path': None
+    'sim_path': None,
+
+    'losses': ['sim', 'conf', 'fprop']
 }
 
 # reservoir network. shouldn't be trained
@@ -523,12 +525,11 @@ class HypothesisNet(nn.Module):
         if not hasattr(self.args, 'network_seed'):
             self.args.network_seed = random.randrange(1e6)
         self._init_vars()
-        self.log_h_yes = Latent(1, 0.9)
-        self.log_s_yes = Latent(1, 0.9)
-        self.log_conf = Latent(1, 0.9)
+        self.log_h_yes = Latent(1, 0.95)
+        self.log_s_yes = Latent(1, 0.95)
+        self.log_conf = Latent(1, 0.95)
 
         self.switch = False
-        self.fails = 0
 
         self.reset()
 
@@ -568,6 +569,7 @@ class HypothesisNet(nn.Module):
 
         lconf = []
         lsim = []
+        lfprop = []
 
         for i in range(len(t)):
             # number of predicted steps forward should not be too large (e.g. greater than H time) or this will break
@@ -579,23 +581,15 @@ class HypothesisNet(nn.Module):
 
             cur_s = self.s[i].unsqueeze(0)
             cur_t = t[i].unsqueeze(0)
-            self.h_latent[i].add_input(cur_s, cur_t)
 
             if self.c[i] == 'h':
                 if self.cur_h[i] is None:
                     # no hypothesis, so make a hypothesis now
-                    # inp = self.h_latent[i].get_input()
-                    # using very current data instead of lagged data
                     prop_arr, extras_arr = self.hypothesizer(cur_s, cur_t)
                     kls = [e['kl'][0] for e in extras_arr]
                     confs = [e['conf'][0] for e in extras_arr]
                     self.cur_h_arr[i] = list(zip(prop_arr, kls, confs))
                     self.cur_h_ind[i] = 0
-
-                    # using lagged data
-                    # self.cur_h[i] = self.hypothesizer(*inp)
-
-                    # old simulation doesn't matter cus we now got a new hypothesis
                     self.cur_s[i] = None
 
                 # did our hypothesis finish computing?
@@ -612,10 +606,8 @@ class HypothesisNet(nn.Module):
                     eps = torch.rand_like(conf)
                     do_sim = eps > conf
                     if do_sim and not self.switch:
-                        # not confident enough, do a simulation
-                        # print('h refused')
+                        # not confident enough, do a simulation. stop the current movement (use all 0s)
                         self.c[i] = 's'
-                        # stop the current movement (all 0s) because we're not really sure what to do next
                         self.p[i] = [self.p[i][0]*0, 0, 0]
                         self.log_h_yes.add_input(0)
                     else:
@@ -623,10 +615,6 @@ class HypothesisNet(nn.Module):
                         self.log_h_yes.add_input(1)
                         self.p[i] = self.cur_h[i]
                         self.cur_h[i] = None
-
-                else:
-                    # it didn't finish computing yet, so nothing's gonna happen
-                    pass
 
             # don't use elif so we immediately move to simulation
             if self.c[i] == 's':
@@ -646,14 +634,18 @@ class HypothesisNet(nn.Module):
                         # pred_cur = self.simulator(cur_s, self.p[i][0])
                         dist_prop = torch.norm(t[i] - s_pred[0])
                         dist_cur = torch.norm(t[i] - cur_s)
-                        self.cur_s[i] = dist_prop < dist_cur
+                        # detach because we don't want to train the simulator in this instance,
+                        # only the hypothesizer, for lconf and lfprop
+                        self.cur_s[i] = [dist_cur.detach(), dist_prop]
                         self.s_prop[i] = s_pred
 
                 s_done = self.s_latent[i].step()
                 if s_done:
                     # confidence loss compares confidence and whether it was approved or not
-                    lconf.append(10 * loss_confidence(self.cur_h[i][2], self.cur_s[i]))
-                    if self.cur_s[i]:
+                    dist_cur, dist_prop = self.cur_s[i]
+                    s_approved = dist_prop < dist_cur
+                    lconf.append(loss_confidence(self.cur_h[i][2], s_approved))
+                    if s_approved:
                         # it works! go with it
                         self.log_s_yes.add_input(1)
                         self.old_s[i] = [self.args.s_steps, self.s_prop[i][0]]
@@ -667,8 +659,7 @@ class HypothesisNet(nn.Module):
                     else:
                         # didn't work :(
                         self.log_s_yes.add_input(0)
-                        # self.old_s_prop[i][self.old_s_prop_idx[i]] = pred_cur
-
+                        lfprop.append(loss_failed_prop(dist_cur, dist_prop))
                         # move on to the next proposal
                         self.cur_h_ind[i] += 1
                         # rejected all proposals, try again
@@ -690,7 +681,7 @@ class HypothesisNet(nn.Module):
         self.s = self.s + z
 
         if extras:
-            return self.s, {'z': z, 'prop': p, 'kl': sum(kl), 'lconf': sum(lconf), 'lsim': sum(lsim)}
+            return self.s, {'z': z, 'prop': p, 'kl': sum(kl), 'lconf': sum(lconf), 'lsim': sum(lsim), 'lfprop': sum(lfprop)}
         return self.s
 
     def reset(self, res_state=None):
