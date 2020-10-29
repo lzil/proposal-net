@@ -44,43 +44,37 @@ def get_output_activation(args):
 
 def get_potential(args):
     if args.goals_potential == 'none':
-        p = potentials.none
-    elif args.goals_potential == 'sin_xy':
-        p = potentials.sin_xy
-    elif args.goals_potential == 'sin_sphere':
-        p = potentials.sin_sphere
-    elif args.goals_potential == 'gentle_slope':
-        p = potentials.gentle_slope
-    elif args.goals_potential == 'central_bump':
-        p = potentials.central_bump
+        p = potentials.p_none
+    elif args.goals_potential == 'sin':
+        p = potentials.p_sin
+    elif args.goals_potential == 'slope':
+        p = potentials.p_slope
+    elif args.goals_potential == 'bump':
+        p = potentials.p_bump
     return p
 
 ### LOSSES
 
 # loss function for sequential goals
-def goals_loss(out, targets, indices, p_fn, threshold=1, update=True, lam_r=2):
+def goals_loss(out, targets, indices, threshold=1, update=True, lam_r=2):
     target = targets[torch.arange(targets.shape[0]),indices,:]
-    ps = []
     if len(out.shape) > 1:
         dists = torch.norm(out - target, dim=1)
-        for pt in out:
-            ps.append(p_fn(pt))
     else:
         # just one dimension so only one element in batch
         dists = torch.norm(out - target, dim=0, keepdim=True)
-        ps = [p_fn(out)]
 
     done = (dists < threshold) * 1
     # update the indices while we're at it
     if update:
         indices = update_goal_indices(targets, indices, done)
-    loss = torch.sum(dists) - lam_r * indices.sum() + sum(ps)
+    loss = torch.sum(dists) - lam_r * indices.sum()
     return loss, indices
 
 # loss function for confidence
 # labels are whether the simulator judged them to be right or wrong
 def loss_confidence(conf, labels, lam_c=5, lam_w=10):
-    loss = torch.square(conf - labels.long())
+    loss = nn.MSELoss()(conf, labels.float())
     # give higher weight to those in which confidence is well-placed
     loss = lam_w * loss * (1 + lam_c * labels.long())
     return loss
@@ -89,6 +83,7 @@ def loss_confidence(conf, labels, lam_c=5, lam_w=10):
 def loss_simulator(out, target, lam_w=5):
     return lam_w * nn.MSELoss()(out, target)
 
+# train the hypothesizer when a proposal is failed by the simulator
 def loss_failed_prop(d_cur, d_prop, lam_w=1):
     return lam_w * nn.MSELoss()(d_cur, d_prop)
 

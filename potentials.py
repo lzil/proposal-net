@@ -8,56 +8,63 @@ from torch.distributions.multivariate_normal import MultivariateNormal as TMVN
 
 import pdb
 
-def none(x, npy=False):
-    return 0 * x[0] * x[1]
-
-def sin_sphere(x, npy=False):
+def p_none(x, npy=False):
     if npy:
-        z = np.sin(np.sqrt(x[0] ** 2 + x[1] ** 2))
+        z = np.zeros(x.shape[:-1])
+    else:
+        z = torch.zeros(x.shape[:-1])
+    return z
+
+def p_sin(x, npy=False):
+    if npy:
+        z = np.sin(np.linalg.norm(x, axis=-1))
         z = np.clip(z, a_min=0, a_max=None)
     else:
-        z = torch.sin(torch.sqrt(x[0] ** 2 + x[1] ** 2))
+        z = torch.sin(torch.linalg.norm(x, dim=-1))
         z = torch.clamp(z, min=0)
-    return z
+    return 10*z
 
-def gentle_slope(x, npy=False):
-    z = .02 * (x[0] ** 2 + x[1] ** 2)
-    return z
-
-def central_bump(x, npy=False):
+def p_slope(x, npy=False):
     if npy:
-        x_adj = x.transpose(1, 2, 0)
-        z = MVN(np.zeros(len(x))).pdf(x_adj)
+        z = np.linalg.norm(x, axis=-1)
     else:
-        dist = TMVN(torch.zeros(len(x)), torch.eye(x.shape[0]))
-        x_adj = x.permute(1, 2, 0).float()
-        z = torch.exp(dist.log_prob(x_adj))
-    return 10 * z
+        z = torch.linalg.norm(x, dim=-1)
+    return .3 * z
 
-
+def p_bump(x, npy=False):
+    ndims = x.shape[-1]
+    if npy:
+        z = MVN(np.zeros(ndims)).pdf(x)
+    else:
+        dist = TMVN(torch.zeros(ndims), torch.eye(ndims))
+        z = torch.exp(dist.log_prob(x.float()))
+    return 100 * z
 
 if __name__ == '__main__':
 
     lim = 10
-    npy = True
+    
 
     x = np.outer(np.linspace(-lim, lim, 1000), np.ones(1000))
     y = x.copy().T
 
-    ins = np.stack([x, y])
+    ins = np.stack([x, y]).transpose(1, 2, 0)
     if not npy:
         x = torch.tensor(x)
         y = torch.tensor(y)
         ins = torch.tensor(ins)
 
-    p = 'central_bump'
+    p = 'sin'
+    npy = True
 
-    if p == 'gentle_slope':
-        z = gentle_slope(ins, npy)
-    elif p == 'central_bump':
-        z = central_bump(ins, npy)
-    elif p == 'sin_sphere':
-        z = sin_sphere(ins, npy)
+    if p == 'slope':
+        z = p_slope(ins, npy)
+    elif p == 'bump':
+        z = p_bump(ins, npy)
+    elif p == 'sin':
+        z = p_sin(ins, npy)
+    else:
+        z = p_none(ins, npy)
 
     if not npy:
         z = z.detach().numpy()

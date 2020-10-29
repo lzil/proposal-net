@@ -71,7 +71,8 @@ def test_model(net, config, n_tests=0):
                     # need to add the dimension back in so the goals loss fn works
                     net_out_k = net_out[k].unsqueeze(0)
                     x_k = x[k].unsqueeze(0)
-                    step_loss, cur_idx[k] = goals_loss(net_out_k, x_k, cur_idx[k], p_fn, threshold=config.goals_threshold)
+                    # need to adjust this because we're separating losses from each other
+                    step_loss, cur_idx[k] = goals_loss(net_out_k, x_k, cur_idx[k], threshold=config.goals_threshold)
                     trial_losses.append(step_loss)
                     # dones[k] = done.item()
                 # cur_idx = update_seq_indices(x, cur_idx, dones)

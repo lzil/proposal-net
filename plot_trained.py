@@ -106,14 +106,20 @@ if not args.no_plot:
                 # plot potential
                 if config.goals_potential != 'none':
                     p_lim = 15
-                    zx = np.outer(np.linspace(-p_lim, p_lim, 30), np.ones(30)) 
-                    zy = zx.copy().T # transpose 
-                    zz = np.zeros_like(zx)
-                    for dim1 in range(30):
-                        for dim2 in range(30):
-                            zz[dim1, dim2] = p_fn((zx[dim1, dim2], zy[dim1, dim2]), npy=True)
+                    px = np.outer(np.linspace(-p_lim, p_lim, 100), np.ones(100))
+                    py = px.copy().T
+                    pz = np.stack([px, py]).transpose(1, 2, 0)
+                    pz = p_fn(pz, npy=True)
+
+
+                    # zx = np.outer(np.linspace(-p_lim, p_lim, 30), np.ones(30)) 
+                    # zy = zx.copy().T # transpose 
+                    # zz = np.zeros_like(zx)
+                    # for dim1 in range(30):
+                    #     for dim2 in range(30):
+                    #         zz[dim1, dim2] = p_fn((zx[dim1, dim2], zy[dim1, dim2]), npy=True)
                     #zz = p_fn([zx, zy], npy=True)
-                    ax.imshow(zz, cmap='plasma', norm=colors.Normalize(vmin=0,vmax=1), interpolation='nearest', extent=(-p_lim,p_lim,-p_lim,p_lim), alpha=1)
+                    ax.imshow(pz, cmap='plasma', norm=colors.Normalize(vmin=0,vmax=1), interpolation='nearest', extent=(-p_lim,p_lim,-p_lim,p_lim), alpha=1)
 
                     ax.set_xlim([-p_lim,p_lim])
                     ax.set_ylim([-p_lim,p_lim])

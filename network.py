@@ -205,6 +205,7 @@ class Simulator(nn.Module):
 
         if args.sim_path is not None:
             self.load_state_dict(torch.load(args.sim_path))
+            # think about loading config file too, so we know exactly which reservoir seed we used and such
 
     def forward(self, s, p):
         # in case we're working with a batch of unknown size
@@ -570,13 +571,17 @@ class HypothesisNet(nn.Module):
         lfprop = []
 
         for i in range(len(t)):
-            # number of predicted steps forward should not be too large (e.g. greater than H time) or this will break
-            if self.old_s[i] is not None:
-                self.old_s[i][0] -= 1
-                if self.old_s[i][0] == 0:
-                    lsim.append(loss_simulator(self.s[i], self.old_s[i][1]))
-                    self.old_s[i] = None
-
+            # learning simulator with what happens in real life given proposals that were simulated
+            garbage_js = []
+            for j, old_s in enumerate(self.old_s[i]):
+                old_s[0] -= 1
+                if old_s[0] == 0:
+                    lsim.append(loss_simulator(old_s[1], self.s[i].detach()))
+                    garbage_js.append(j)
+            # delete the indices written backwards
+            for j in sorted(garbage_js, reverse=True):
+                del self.old_s[i][j]
+            
             cur_s = self.s[i].unsqueeze(0)
             cur_t = t[i].unsqueeze(0)
 
@@ -646,7 +651,7 @@ class HypothesisNet(nn.Module):
                     if s_approved:
                         # it works! go with it
                         self.log_s_yes.add_input(1)
-                        self.old_s[i] = [self.args.s_steps, self.s_prop[i][0]]
+                        self.old_s[i].append([self.args.s_steps, self.s_prop[i][0]])
                         self.p[i] = self.cur_h[i]
                         self.cur_s[i] = None
                         self.s_prop[i] = None
@@ -702,12 +707,12 @@ class HypothesisNet(nn.Module):
         self.p = [[torch.zeros(1, self.args.D), torch.tensor(0.), torch.tensor(0.)] for i in range(bs)] # the current proposal (to output)
         self.cur_h = [None] * bs # the current hypothesis (to process via S)
         self.cur_s = [None] * bs # whether we've approved the current hypothesis
-        self.cur_h_arr = [None] * bs
-        self.cur_h_ind = [0] * bs
+        self.cur_h_arr = [None] * bs # the collection of proposals/hypotheses output from H
+        self.cur_h_ind = [0] * bs # which p we're trying at the moment
         self.h_latent = [Latent(self.args.h_latency, self.args.latent_decay) for i in range(bs)] # h inputs
         self.s_latent = [Latent(self.args.s_latency, self.args.latent_decay) for i in range(bs)] # s inputs
-        self.old_s = [None] * bs
-        self.s_prop = [None] * bs
+        self.old_s = [[] for i in range(bs)] # for updating S when it predicts
+        self.s_prop = [None] * bs # to carry S prediction short-term for updates
 
     def _adj_input_dim(self, t):
         if len(t.shape) == 2:

@@ -116,7 +116,7 @@ class Trainer:
         # outs is output of network
         if self.args.dset_type == 'goals':
             ins = []
-            l_other = {'kl': 0, 'lconf': 0, 'lsim': 0, 'lfprop': 0}
+            l_other = {'kl': 0, 'lconf': 0, 'lsim': 0, 'lfprop': 0, 'lp': 0}
             targets = x
             cur_idx = torch.zeros(x.shape[0], dtype=torch.long)
             for j in range(self.args.goals_timesteps):
@@ -132,8 +132,10 @@ class Trainer:
                     l_other['lconf'] += extras['lconf']
                 if 'lsim' in extras and extras['lsim'] is not None:
                     l_other['lsim'] += extras['lsim']
-                if 'lfprop' in extras and extras['lfprop'] is not None:
-                    l_other['lfprop'] += extras['lfprop']
+                if 'lp' in extras and extras['lp'] is not None:
+                    l_other['lp'] += extras['lp']
+                # if 'lfprop' in extras and extras['lfprop'] is not None:
+                #     l_other['lfprop'] += extras['lfprop']
 
             ins = torch.cat(ins)
 
@@ -178,15 +180,23 @@ class Trainer:
         net_in = x_goal.reshape(-1, self.args.L)
         net_out, extras = self.net(net_in, extras=True)
         # the target is actually the input
-        step_loss, new_indices = goals_loss(net_out, x, indices, self.potential, threshold=self.args.goals_threshold)
+        step_loss, new_indices = goals_loss(net_out, x, indices, threshold=self.args.goals_threshold)
         # it'll be None if we just started, or if we're not doing variational stuff
+
+        # non-goals related losses
+        # if net_out.shape[0] != 1:
+        #     pdb.set_trace()
+        extras['lp'] = self.potential(net_out).sum()
+        step_loss += extras['lp']
         if 'kl' in extras and extras['kl'] is not None:
             step_loss += extras['kl']
         if 'lconf' in extras and extras['lconf'] is not None:
             step_loss += extras['lconf']
         if 'lsim' in extras and extras['lsim'] is not None:
             step_loss += extras['lsim']
-        # hacky way to append the net_in
+        # if 'lfprop' in extras and extras['lfprop'] is not None:
+        #     step_loss += extras['lfprop']
+
         extras.update({'in': net_in})
 
         return net_out, step_loss, new_indices, extras
@@ -267,7 +277,7 @@ class Trainer:
                     z = np.stack(outs).squeeze()
                     # avg of the last 50 trials
                     avg_loss = running_loss / self.args.batch_size / self.log_interval
-                    test_loss, test_etc = self.test(n=10)
+                    test_loss, test_etc = self.test(n=30)
                     # avg_max_grad = running_mag / self.log_interval
                     log_arr = [
                         f'iteration {ix}',
@@ -283,14 +293,14 @@ class Trainer:
                         ha = self.net.log_h_yes.get_input()
                         sa = self.net.log_s_yes.get_input()
                         conf = self.net.log_conf.get_input()
-                        lconf, lsim, kl, lfprop = etc['lconf'], etc['lsim'], etc['kl'], etc['lfprop']
+                        lconf, lsim, kl, lp = etc['lconf'], etc['lsim'], etc['kl'], etc['lp']
                         log_arr.append(f'hyp_app {ha:.3f}')
                         log_arr.append(f'sim_app {sa:.3f}')
                         log_arr.append(f'conf {conf:.3f}')
                         log_arr.append(f'lconf {lconf:.3f}')
                         log_arr.append(f'lsim {lsim:.3f}')
-                        log_arr.append(f'lfprop {lfprop:.3f}')
-                        log_arr.append(f'kl {kl:.3f}')
+                        log_arr.append(f'lp {lp:.3f}')
+                        # log_arr.append(f'kl {kl:.3f}')
                     log_str = '\t| '.join(log_arr)
                     logging.info(log_str)
 
